@@ -81,12 +81,32 @@ def _repl(cfg: Dict, messages: List[Dict], console: Console, renderer: Renderer,
     def persist():
         save_session(session_path, messages, cfg["model"])
 
+    pending_images: List[str] = []
+    prompt_session = _make_prompt_session(pending_images)
+    if prompt_session is not None:
+        console.print("[dim]Tip: press Alt+V to attach an image from your clipboard (Win+Shift+S to snip).[/dim]\n")
+
+    def read_line() -> str:
+        if prompt_session is not None:
+            return prompt_session.prompt("> ")
+        return console.input("[bold green]›[/bold green] ")
+
     while True:
         try:
-            line = console.input("[bold green]›[/bold green] ").strip()
+            raw = read_line()
         except (EOFError, KeyboardInterrupt):
             console.print("\n[dim]bye[/dim]")
             return 0
+
+        # An Alt+V paste inserts a "[image]" marker and queues the file.
+        line = raw.replace("[image]", "").strip()
+        if pending_images:
+            imgs = list(pending_images)
+            pending_images.clear()
+            _run_once(cfg, messages, console, renderer,
+                      line or "What is in this image? Describe it.", images=imgs, approver=approver)
+            persist()
+            continue
 
         if not line:
             continue
@@ -99,9 +119,10 @@ def _repl(cfg: Dict, messages: List[Dict], console: Console, renderer: Renderer,
                 return 0
             if cmd == "/help":
                 console.print(
-                    "[dim]/clear — reset conversation\n"
+                    "[dim]/paste [prompt] — attach the image on your clipboard (Win+Shift+S to snip)\n"
+                    "/image <path> <prompt> — attach an image file\n"
+                    "/clear — reset conversation\n"
                     "/model <tag> — switch model\n"
-                    "/image <path> <prompt> — attach an image\n"
                     "/save — save this session now\n"
                     "/sessions — list saved sessions in this folder\n"
                     "/resume [name] — load the latest (or named) session\n"
@@ -150,6 +171,16 @@ def _repl(cfg: Dict, messages: List[Dict], console: Console, renderer: Renderer,
                 _run_once(cfg, messages, console, renderer, parts[2], images=[parts[1]], approver=approver)
                 persist()
                 continue
+            if cmd == "/paste":
+                rest = line.split(maxsplit=1)
+                prompt_text = rest[1] if len(rest) > 1 else "What is in this image? Describe it."
+                path, err = _grab_clipboard_to_file()
+                if not path:
+                    console.print(f"[yellow]{err}. Snip with Win+Shift+S or copy an image, then retry.[/yellow]")
+                    continue
+                _run_once(cfg, messages, console, renderer, prompt_text, images=[path], approver=approver)
+                persist()
+                continue
             console.print(f"[red]unknown command: {cmd}[/red] [dim](/help)[/dim]")
             continue
 
@@ -164,6 +195,66 @@ def session_dir_lookup(name: str):
     for cand in (d / name, d / f"{name}.json"):
         if cand.exists():
             return cand
+
+
+def _grab_clipboard_to_file():
+    """Return (path, error). A temp/real image file from the clipboard, or None.
+
+    Handles both a bitmap on the clipboard (Win+Shift+S snip, or Ctrl+C from an
+    image app) and image file(s) copied in Explorer.
+    """
+    try:
+        from PIL import ImageGrab
+    except ImportError:
+        return None, "Pillow not installed (pip install pillow)"
+    try:
+        data = ImageGrab.grabclipboard()
+    except Exception as e:
+        return None, f"clipboard read failed: {e}"
+    if data is None:
+        return None, "no image on the clipboard"
+    # Copied image file(s) from Explorer -> list of paths.
+    if isinstance(data, list):
+        imgs = [p for p in data if str(p).lower().endswith((".png", ".jpg", ".jpeg", ".gif", ".webp", ".bmp"))]
+        return (imgs[0], None) if imgs else (None, "clipboard has files but no image")
+    # A bitmap (snip / copied from an app) -> PIL Image; save to a temp PNG.
+    try:
+        import os
+        import tempfile
+        fd, tmp = tempfile.mkstemp(prefix="gemma_paste_", suffix=".png")
+        os.close(fd)
+        data.save(tmp, "PNG")
+        return tmp, None
+    except Exception as e:
+        return None, f"could not save pasted image: {e}"
+
+
+def _make_prompt_session(pending_images: List[str]):
+    """A prompt_toolkit session with Alt+V bound to paste a clipboard image.
+
+    Returns None when input isn't an interactive TTY (piped/scripted) or
+    prompt_toolkit isn't available — callers fall back to a plain reader.
+    """
+    if not sys.stdin.isatty():
+        return None
+    try:
+        from prompt_toolkit import PromptSession
+        from prompt_toolkit.key_binding import KeyBindings
+    except ImportError:
+        return None
+
+    kb = KeyBindings()
+
+    @kb.add("escape", "v")  # Alt+V (Meta+V is sent as ESC then v)
+    def _paste(event):
+        path, _err = _grab_clipboard_to_file()
+        if path:
+            pending_images.append(path)
+            event.app.current_buffer.insert_text("[image] ")
+        else:
+            event.app.output.bell()
+
+    return PromptSession(key_bindings=kb)
     return None
 
 
