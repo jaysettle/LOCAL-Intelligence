@@ -75,8 +75,19 @@ The installer will: install Ollama if missing → pull `gemma4:12b` → install 
 `gemma` CLI → write a default config → set up a local SearXNG search container
 (if Docker is present) → run a smoke test.
 
-Installer flags: `-Model gemma4:e4b`, `-SkipModel`, `-SkipSearch` (PowerShell) /
-`--model`, `--skip-model`, `--skip-search` (bash).
+Installer flags: `-Model gemma4:e4b`, `-SkipModel`, `-SkipSearch`, `-SkipUpdate`
+(PowerShell) / `--model`, `--skip-model`, `--skip-search`, `--skip-update` (bash).
+
+### Updating
+
+Re-run the installer any time to update — it `git pull`s the latest, reinstalls
+the CLI, and **skips the large Ollama/model downloads when they're already
+present**, so an update is quick:
+
+```powershell
+cd LOCAL-Intelligence
+powershell -ExecutionPolicy Bypass -File .\install.ps1
+```
 
 ## Use
 
