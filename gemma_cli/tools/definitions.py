@@ -156,6 +156,28 @@ TOOLS = [
             "required": ["text"],
         },
     },
+    {
+        "name": "set_plan",
+        "description": "For a multi-step task, record your plan as a checklist BEFORE starting. Keeps you on track. Call complete_step as you finish each item.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "steps": {"type": "array", "items": {"type": "string"}, "description": "Ordered list of short step descriptions"},
+            },
+            "required": ["steps"],
+        },
+    },
+    {
+        "name": "complete_step",
+        "description": "Mark a plan step done (1-based index) and see the updated checklist.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "index": {"type": "integer", "description": "1-based index of the step to mark complete"},
+            },
+            "required": ["index"],
+        },
+    },
 ]
 
 # Ollama / OpenAI function-calling shape derived from the schemas above.

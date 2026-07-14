@@ -51,12 +51,28 @@ def _preflight(cfg: Dict, console: Console) -> None:
         )
 
 
-def _run_once(cfg, messages, console, renderer, text, images=None) -> None:
-    events = run_turn(cfg, messages, text, image_paths=images)
+def _run_once(cfg, messages, console, renderer, text, images=None, approver=None) -> None:
+    events = run_turn(cfg, messages, text, image_paths=images, approver=approver)
     renderer.consume(events)
 
 
-def _repl(cfg: Dict, messages: List[Dict], console: Console, renderer: Renderer, session_path) -> int:
+def _make_approver(console: Console):
+    """Return a y/N prompt callback for gating mutating tool calls."""
+    from .render import _arg_preview
+
+    def approver(name, args) -> bool:
+        try:
+            ans = console.input(
+                f"[yellow]Approve[/yellow] [bold]{name}[/bold] [dim]{_arg_preview(args)}[/dim] ? [y/N] "
+            ).strip().lower()
+        except (EOFError, KeyboardInterrupt):
+            return False
+        return ans in ("y", "yes")
+
+    return approver
+
+
+def _repl(cfg: Dict, messages: List[Dict], console: Console, renderer: Renderer, session_path, approver=None) -> int:
     console.print(f"[bold]LOCAL-Intelligence[/bold] [dim]v{__version__}[/dim] — model [cyan]{cfg['model']}[/cyan]")
     console.print(f"[dim]working dir:[/dim] [green]{os.getcwd()}[/green]")
     console.print("[dim]Type your message. /help for commands, /exit to quit.[/dim]\n")
@@ -131,13 +147,13 @@ def _repl(cfg: Dict, messages: List[Dict], console: Console, renderer: Renderer,
                 if len(parts) < 3:
                     console.print("[red]usage: /image <path> <prompt>[/red]")
                     continue
-                _run_once(cfg, messages, console, renderer, parts[2], images=[parts[1]])
+                _run_once(cfg, messages, console, renderer, parts[2], images=[parts[1]], approver=approver)
                 persist()
                 continue
             console.print(f"[red]unknown command: {cmd}[/red] [dim](/help)[/dim]")
             continue
 
-        _run_once(cfg, messages, console, renderer, line)
+        _run_once(cfg, messages, console, renderer, line, approver=approver)
         persist()
 
 
@@ -183,6 +199,8 @@ def main(argv: Optional[List[str]] = None) -> int:
     parser.add_argument("--setup-config", action="store_true", help="Write a default config.yaml and exit.")
     parser.add_argument("--resume", "--continue", dest="resume", action="store_true",
                         help="Resume the most recent session in this folder.")
+    parser.add_argument("--approve", choices=["none", "writes", "all"],
+                        help="Require y/N approval before mutating actions (file writes/edits/deletes, shell).")
     parser.add_argument("--version", action="version", version=f"LOCAL-Intelligence {__version__}")
     args = parser.parse_args(argv)
 
@@ -237,15 +255,18 @@ def main(argv: Optional[List[str]] = None) -> int:
     if session_path is None:
         session_path = new_session_path()
 
+    approve_mode = args.approve or cfg.get("approve", "none")
+    approver = _make_approver(console) if approve_mode in ("writes", "all") else None
+
     if not repl_mode and inline_prompt:
-        _run_once(cfg, messages, console, renderer, inline_prompt, images=args.image)
+        _run_once(cfg, messages, console, renderer, inline_prompt, images=args.image, approver=approver)
         save_session(session_path, messages, cfg["model"])
         return 0
 
     if args.image:
         console.print("[yellow]--image is only used with a one-shot prompt. Ignoring.[/yellow]")
 
-    return _repl(cfg, messages, console, renderer, session_path)
+    return _repl(cfg, messages, console, renderer, session_path, approver=approver)
 
 
 if __name__ == "__main__":

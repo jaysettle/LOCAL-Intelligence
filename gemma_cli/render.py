@@ -70,6 +70,12 @@ class Renderer:
                     tail = f" [dim](+{more} lines)[/dim]" if more else ""
                     self.console.print(f"   [dim]{first[:120]}[/dim]{tail}")
 
+            elif kind == "notice":
+                if mode is not None:
+                    self.console.print()
+                mode = None
+                self.console.print(f"[dim italic]· {payload}[/dim italic]")
+
             elif kind == "error":
                 if mode is not None:
                     self.console.print()

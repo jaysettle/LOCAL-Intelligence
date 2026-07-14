@@ -9,6 +9,7 @@ from .file_tools import (
 from .shell_tools import shell, grep
 from .web_tools import web_search, web_fetch
 from .memory_tools import remember
+from .plan_tools import set_plan, complete_step
 
 _DISPATCH = {
     "read_file": read_file,
@@ -22,6 +23,8 @@ _DISPATCH = {
     "web_search": web_search,
     "web_fetch": web_fetch,
     "remember": remember,
+    "set_plan": set_plan,
+    "complete_step": complete_step,
 }
 
 

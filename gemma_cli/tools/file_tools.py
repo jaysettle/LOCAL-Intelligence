@@ -6,6 +6,7 @@ edits back up the prior version to .gemma/backups first; deletes go to the OS
 trash (recoverable).
 """
 
+import difflib
 import glob as glob_module
 import os
 import shutil
@@ -131,9 +132,17 @@ def edit_file(inp: Dict[str, Any]) -> str:
 
     count = text.count(old)
     if count == 0:
+        # Recovery hint: show the closest-matching lines so the model can retry.
+        first_line = next((ln for ln in old.splitlines() if ln.strip()), old)
+        close = difflib.get_close_matches(first_line, text.splitlines(), n=3, cutoff=0.5)
+        hint = ""
+        if close:
+            hint = "\nClosest lines already in the file (copy one exactly):\n" + "\n".join(
+                f"    {c}" for c in close
+            )
         return (
             f"Error: old_string not found in {target}. Read the file first and copy the "
-            "exact text to replace, including whitespace and indentation."
+            f"exact text to replace, including whitespace and indentation.{hint}"
         )
     if count > 1 and not replace_all:
         return (
