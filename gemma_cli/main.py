@@ -2,8 +2,11 @@
 """
 LOCAL-Intelligence CLI entry point.
 
-  gemma                         interactive REPL
-  gemma -p "prompt"             one-shot, prints answer and exits
+  gemma go                      interactive chat session in the current folder
+  gemma go C:\path\to\project   interactive chat session in a specific folder
+  gemma                         interactive chat session (same as `go`)
+  gemma "quick question"        one-shot, prints answer and exits
+  gemma -p "prompt"             one-shot (explicit flag form)
   gemma -i img.png -p "..."     attach an image (vision)
   gemma --model gemma4:e4b      override model for this run
   gemma --setup-config          write a default config.yaml and exit
@@ -12,6 +15,7 @@ REPL commands: /clear  /model <tag>  /image <path> <prompt>  /help  /exit
 """
 
 import argparse
+import os
 import sys
 from typing import Dict, List, Optional
 
@@ -49,7 +53,9 @@ def _run_once(cfg, messages, console, renderer, text, images=None) -> None:
 
 
 def _repl(cfg: Dict, messages: List[Dict], console: Console, renderer: Renderer) -> int:
+    import os
     console.print(f"[bold]LOCAL-Intelligence[/bold] [dim]v{__version__}[/dim] — model [cyan]{cfg['model']}[/cyan]")
+    console.print(f"[dim]working dir:[/dim] [green]{os.getcwd()}[/green]")
     console.print("[dim]Type your message. /help for commands, /exit to quit.[/dim]\n")
     _preflight(cfg, console)
 
@@ -116,6 +122,12 @@ def main(argv: Optional[List[str]] = None) -> int:
         prog="gemma",
         description="LOCAL-Intelligence — a fully local CLI AI agent with filesystem, shell, web and vision tools.",
     )
+    parser.add_argument(
+        "command",
+        nargs="*",
+        help="'go' to start an interactive chat session (optionally 'go <folder>'). "
+             "Or pass a quoted question for a one-shot answer.",
+    )
     parser.add_argument("-p", "--prompt", help="One-shot prompt; prints the answer and exits.")
     parser.add_argument("-i", "--image", action="append", help="Attach an image file (repeatable). Use with -p.")
     parser.add_argument("--model", help="Override the model (e.g. gemma4:12b, gemma4:e4b).")
@@ -134,6 +146,24 @@ def main(argv: Optional[List[str]] = None) -> int:
         console.print(f"[green]Config written:[/green] {path}")
         return 0
 
+    # Interpret the positional command: `go [folder]` => interactive session;
+    # any other bare text => treat as a one-shot prompt (like `gemma "question"`).
+    repl_mode = args.prompt is None and args.image is None
+    inline_prompt = args.prompt
+    if args.command:
+        if args.command[0].lower() == "go":
+            repl_mode = True
+            folder = args.command[1] if len(args.command) > 1 else None
+            if folder:
+                target = os.path.expanduser(folder)
+                if not os.path.isdir(target):
+                    console.print(f"[red]No such folder:[/red] {target}")
+                    return 1
+                os.chdir(target)
+        elif args.prompt is None:
+            inline_prompt = " ".join(args.command)
+            repl_mode = False
+
     overrides = {
         "model": args.model,
         "num_ctx": args.num_ctx,
@@ -148,12 +178,12 @@ def main(argv: Optional[List[str]] = None) -> int:
     messages: List[Dict] = [{"role": "system", "content": build_system_prompt(cfg)}]
     renderer = Renderer(console, show_thinking=cfg.get("show_thinking", True), verbose=args.verbose)
 
-    if args.prompt:
-        _run_once(cfg, messages, console, renderer, args.prompt, images=args.image)
+    if not repl_mode and inline_prompt:
+        _run_once(cfg, messages, console, renderer, inline_prompt, images=args.image)
         return 0
 
     if args.image:
-        console.print("[yellow]--image is only used with -p/--prompt. Ignoring.[/yellow]")
+        console.print("[yellow]--image is only used with a one-shot prompt. Ignoring.[/yellow]")
 
     return _repl(cfg, messages, console, renderer)
 

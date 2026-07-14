@@ -64,10 +64,29 @@ Installer flags: `-Model gemma4:e4b`, `-SkipModel`, `-SkipSearch` (PowerShell) /
 
 ## Use
 
+The primary way to use it is like a project-aware coding CLI: `cd` into a folder
+and start a chat session. The agent is oriented in that folder — it sees the
+files, relative paths resolve there, the shell runs there, and it can edit files
+there.
+
+```powershell
+cd C:\path\to\my-project
+gemma go                               # interactive chat, anchored in this folder
+```
+
+Or point it at a folder directly:
+
+```powershell
+gemma go C:\path\to\my-project         # chat session anchored in that folder
+```
+
+Other forms:
+
 ```bash
-gemma                                  # interactive chat
-gemma -p "summarize ~/notes/todo.md"   # one-shot, prints and exits
-gemma -i photo.jpg -p "what is this?"  # attach an image
+gemma                                  # same as `gemma go` (uses current folder)
+gemma "what changed in this repo today?"   # one-shot, prints and exits
+gemma -p "summarize todo.md"           # one-shot (explicit flag form)
+gemma -i photo.jpg -p "what is this?"  # attach an image (vision)
 gemma --model gemma4:e4b               # use the smaller/faster edge model
 gemma --no-thinking                    # hide the model's reasoning
 gemma --verbose                        # show full tool output
@@ -75,6 +94,10 @@ gemma --verbose                        # show full tool output
 
 REPL commands: `/clear` (reset), `/model <tag>` (switch), `/image <path> <prompt>`,
 `/help`, `/exit`.
+
+The folder you launch in is automatically added to the writable roots, so the
+agent can create and edit files in your project — but not outside the allowed
+roots (your home, temp, and the launch folder by default).
 
 ## Configuration
 

@@ -82,7 +82,7 @@ def write_file(inp: Dict[str, Any]) -> str:
 
 def glob_files(inp: Dict[str, Any]) -> str:
     pattern = str(inp.get("pattern", ""))
-    base = os.path.expanduser(str(inp.get("path", "~")))
+    base = os.path.expanduser(str(inp.get("path", ".")))
     if not pattern:
         return "Error: 'pattern' is required"
 
@@ -102,7 +102,7 @@ def glob_files(inp: Dict[str, Any]) -> str:
 
 
 def list_directory(inp: Dict[str, Any]) -> str:
-    path = os.path.expanduser(str(inp.get("path", "~")))
+    path = os.path.expanduser(str(inp.get("path", ".")))
     if not os.path.exists(path):
         return f"Error: Path not found: {path}"
     if not os.path.isdir(path):

@@ -66,7 +66,7 @@ def shell(inp: Dict[str, Any]) -> str:
             capture_output=True,
             text=True,
             timeout=timeout,
-            cwd=os.path.expanduser("~"),
+            cwd=os.getcwd(),  # run in the folder gemma was launched from
         )
     except subprocess.TimeoutExpired:
         return f"Error: command timed out after {timeout} seconds"

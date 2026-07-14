@@ -48,7 +48,7 @@ _ENV_MAP = {
 
 def default_write_roots() -> List[str]:
     import tempfile
-    return [str(Path.home()), tempfile.gettempdir()]
+    return [str(Path.home()), tempfile.gettempdir(), os.getcwd()]
 
 
 def load_config(overrides: Dict[str, Any] | None = None) -> Dict[str, Any]:
@@ -77,6 +77,12 @@ def load_config(overrides: Dict[str, Any] | None = None) -> Dict[str, Any]:
 
     if not cfg.get("allowed_write_roots"):
         cfg["allowed_write_roots"] = default_write_roots()
+
+    # Always allow writing in the folder gemma was launched from (project cwd),
+    # so `gemma go` in a project directory can edit its files like a dev CLI.
+    cwd = os.getcwd()
+    if cwd not in cfg["allowed_write_roots"]:
+        cfg["allowed_write_roots"] = list(cfg["allowed_write_roots"]) + [cwd]
 
     return cfg
 

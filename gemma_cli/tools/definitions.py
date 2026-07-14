@@ -62,7 +62,7 @@ TOOLS = [
             "type": "object",
             "properties": {
                 "pattern": {"type": "string", "description": "Glob pattern like '**/*.txt'"},
-                "path": {"type": "string", "description": "Base directory to search. Defaults to home.", "default": "~"},
+                "path": {"type": "string", "description": "Base directory to search. Defaults to the current working directory.", "default": "."},
             },
             "required": ["pattern"],
         },
@@ -86,7 +86,7 @@ TOOLS = [
         "input_schema": {
             "type": "object",
             "properties": {
-                "path": {"type": "string", "description": "Directory to list. Defaults to home.", "default": "~"},
+                "path": {"type": "string", "description": "Directory to list. Defaults to the current working directory.", "default": "."},
             },
             "required": [],
         },
