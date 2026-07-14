@@ -18,6 +18,9 @@ Thumbs.db
 .idea/
 .vscode/
 
+# Agent runtime state (sessions, backups, trash) — project-local, not shared
+.gemma/
+
 # Test scratch
 gemma_test/
 *.log

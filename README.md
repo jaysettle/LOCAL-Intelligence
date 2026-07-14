@@ -21,11 +21,27 @@ The five largest items in your Downloads folder are… [summary]
 
 | Tool | Purpose |
 |------|---------|
-| `read_file` / `write_file` | Read and create/overwrite files (writes fenced to allowed roots) |
+| `read_file` / `write_file` | Read files; write whole new files (fenced to allowed roots) |
+| `edit_file` | Change part of a file by exact string replacement (safe for edits) |
+| `delete_file` | Delete to the OS trash / Recycle Bin (recoverable) |
 | `shell` | Run **PowerShell** (Windows) or **bash** (Linux/macOS) commands |
 | `glob` / `grep` / `list_directory` | Find files, search contents, browse folders |
 | `web_search` / `web_fetch` | Search the web via a local SearXNG instance and read pages |
+| `remember` | Persist a durable fact to project or global memory |
+| `set_plan` / `complete_step` | Keep a checklist for multi-step tasks |
 | vision | Attach an image and ask about it (Gemma is multimodal) |
+
+### Memory, sessions & safety
+
+- **Memory** — a `GEMMA.md` in your project folder is auto-loaded into the agent's
+  context each run (like a project README for the AI); it can add to it with the
+  `remember` tool. A global memory file holds cross-project facts.
+- **Sessions** — conversations autosave per folder; `gemma go --resume` picks up
+  where you left off.
+- **Recoverable by default** — edits back up the prior version to `.gemma/backups/`;
+  deletes go to the Recycle Bin.
+- **Approval mode** — `gemma go --approve writes` prompts y/N before any file
+  change or shell command.
 
 ## Requirements
 
@@ -93,7 +109,7 @@ gemma --verbose                        # show full tool output
 ```
 
 REPL commands: `/clear` (reset), `/model <tag>` (switch), `/image <path> <prompt>`,
-`/help`, `/exit`.
+`/save`, `/resume [name]`, `/sessions`, `/help`, `/exit`.
 
 The folder you launch in is automatically added to the writable roots, so the
 agent can create and edit files in your project — but not outside the allowed

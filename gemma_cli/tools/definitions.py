@@ -29,7 +29,7 @@ TOOLS = [
     },
     {
         "name": "write_file",
-        "description": "Write content to a file, creating it (and parent folders) if needed, overwriting if it exists. Restricted to allowed write roots.",
+        "description": "Write a WHOLE file, creating it (and parent folders) if needed, overwriting if it exists. Use this for NEW files or full rewrites. To change PART of an existing file, use edit_file instead — it is safer and cheaper. Restricted to allowed write roots.",
         "input_schema": {
             "type": "object",
             "properties": {
@@ -37,6 +37,31 @@ TOOLS = [
                 "content": {"type": "string", "description": "Full content to write"},
             },
             "required": ["path", "content"],
+        },
+    },
+    {
+        "name": "edit_file",
+        "description": "Change part of an existing file by exact string replacement. PREFER this over write_file for edits — you only supply the small piece that changes, so nothing else is lost. old_string must match the file exactly (including whitespace/indentation) and be unique unless replace_all is true. Read the file first to copy the exact text.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "path": {"type": "string", "description": "Path to the file to edit"},
+                "old_string": {"type": "string", "description": "Exact text to find (copy it verbatim from the file, including indentation)"},
+                "new_string": {"type": "string", "description": "Text to replace it with"},
+                "replace_all": {"type": "boolean", "description": "Replace every occurrence instead of requiring a unique match. Default false.", "default": False},
+            },
+            "required": ["path", "old_string", "new_string"],
+        },
+    },
+    {
+        "name": "delete_file",
+        "description": "Delete a file or folder by sending it to the OS trash / recycle bin (recoverable). Prefer this over 'rm' or 'Remove-Item' in the shell so deletions can be undone. Restricted to allowed write roots.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "path": {"type": "string", "description": "Path to delete"},
+            },
+            "required": ["path"],
         },
     },
     {
@@ -117,6 +142,40 @@ TOOLS = [
                 "max_chars": {"type": "integer", "description": "Max characters to return (up to 20000). Default 8000.", "default": 8000},
             },
             "required": ["url"],
+        },
+    },
+    {
+        "name": "remember",
+        "description": "Save a durable fact to memory so you recall it in future sessions. Use for project conventions, user preferences, or things you were told to remember. 'project' scope writes to GEMMA.md in this folder; 'global' scope applies everywhere.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "text": {"type": "string", "description": "The fact to remember, as a short sentence"},
+                "scope": {"type": "string", "enum": ["project", "global"], "description": "'project' (this folder) or 'global' (everywhere). Default project.", "default": "project"},
+            },
+            "required": ["text"],
+        },
+    },
+    {
+        "name": "set_plan",
+        "description": "For a multi-step task, record your plan as a checklist BEFORE starting. Keeps you on track. Call complete_step as you finish each item.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "steps": {"type": "array", "items": {"type": "string"}, "description": "Ordered list of short step descriptions"},
+            },
+            "required": ["steps"],
+        },
+    },
+    {
+        "name": "complete_step",
+        "description": "Mark a plan step done (1-based index) and see the updated checklist.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "index": {"type": "integer", "description": "1-based index of the step to mark complete"},
+            },
+            "required": ["index"],
         },
     },
 ]

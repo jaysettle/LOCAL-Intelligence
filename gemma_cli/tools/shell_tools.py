@@ -40,7 +40,10 @@ _DANGEROUS_POSIX = [
     r"\bsudo\b",
 ]
 
-_COMPILED = [re.compile(p, re.IGNORECASE) for p in (_DANGEROUS_WINDOWS if _IS_WINDOWS else _DANGEROUS_POSIX)]
+# Check the UNION of both platforms' patterns — defense in depth. A machine may
+# have git-bash/WSL alongside PowerShell, and none of these patterns collide with
+# a legitimate command on the other OS.
+_COMPILED = [re.compile(p, re.IGNORECASE) for p in (_DANGEROUS_WINDOWS + _DANGEROUS_POSIX)]
 
 
 def _blocked(command: str) -> bool:
