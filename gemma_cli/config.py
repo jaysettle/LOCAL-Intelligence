@@ -43,6 +43,10 @@ DEFAULTS: Dict[str, Any] = {
     "approve": "none",
     # Optional smaller model for internal utility calls (compaction, titles)
     "fast_model": None,
+    # Interactive status line (below the input): shows folder + live GPU/CPU/VRAM
+    "status_line": True,
+    "status_segments": ["folder", "gpu", "vram", "cpu", "model"],
+    "status_refresh": 0.5,
 }
 
 _ENV_MAP = {
