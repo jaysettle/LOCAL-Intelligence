@@ -1,11 +1,15 @@
 #!/usr/bin/env python3
 """
-File tools: read_file, write_file, glob, list_directory.
-write_file is fenced to the configured allowed write roots.
+File tools: read_file, write_file, edit_file, delete_file, glob, list_directory.
+Mutating tools are fenced to the configured allowed write roots; overwrites and
+edits back up the prior version to .gemma/backups first; deletes go to the OS
+trash (recoverable).
 """
 
 import glob as glob_module
 import os
+import shutil
+from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, List
 
@@ -30,6 +34,24 @@ def _is_write_allowed(path: Path) -> bool:
         except ValueError:
             continue
     return False
+
+
+def _write_denied_msg(target: Path) -> str:
+    roots = ", ".join(str(r) for r in ALLOWED_WRITE_ROOTS) or "(none configured)"
+    return f"Error: writing outside the allowed roots is not permitted: {target}\nAllowed roots: {roots}"
+
+
+def _backup_existing(target: Path) -> None:
+    """Best-effort copy of an existing file into .gemma/backups before overwrite."""
+    try:
+        if not target.exists() or not target.is_file():
+            return
+        ts = datetime.now().strftime("%Y%m%d-%H%M%S")
+        backup_dir = Path(".gemma") / "backups"
+        backup_dir.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(target, backup_dir / f"{target.name}.{ts}.bak")
+    except Exception:
+        pass  # never let a backup failure block the actual operation
 
 
 def read_file(inp: Dict[str, Any]) -> str:
@@ -68,16 +90,98 @@ def write_file(inp: Dict[str, Any]) -> str:
 
     target = Path(os.path.expanduser(raw))
     if not _is_write_allowed(target):
-        roots = ", ".join(str(r) for r in ALLOWED_WRITE_ROOTS) or "(none configured)"
-        return f"Error: writing outside the allowed roots is not permitted: {target}\nAllowed roots: {roots}"
+        return _write_denied_msg(target)
 
     try:
+        _backup_existing(target)
         target.parent.mkdir(parents=True, exist_ok=True)
         with open(target, "w", encoding="utf-8") as f:
             f.write(content)
         return f"Successfully wrote {len(content)} bytes to {target}"
     except Exception as e:
         return f"Error writing file: {e}"
+
+
+def edit_file(inp: Dict[str, Any]) -> str:
+    """Replace an exact substring in a file. Preferred over write_file for edits."""
+    raw = str(inp.get("path", ""))
+    old = inp.get("old_string")
+    new = inp.get("new_string", "")
+    replace_all = bool(inp.get("replace_all", False))
+
+    if not raw:
+        return "Error: 'path' is required"
+    if old is None or old == "":
+        return "Error: 'old_string' is required (the exact text to replace)"
+    if old == new:
+        return "Error: old_string and new_string are identical; nothing to change."
+
+    target = Path(os.path.expanduser(raw))
+    if not _is_write_allowed(target):
+        return _write_denied_msg(target)
+    if not target.exists():
+        return f"Error: File not found: {target}"
+    if target.is_dir():
+        return f"Error: Path is a directory, not a file: {target}"
+
+    try:
+        text = target.read_text(encoding="utf-8")
+    except Exception as e:
+        return f"Error reading file: {e}"
+
+    count = text.count(old)
+    if count == 0:
+        return (
+            f"Error: old_string not found in {target}. Read the file first and copy the "
+            "exact text to replace, including whitespace and indentation."
+        )
+    if count > 1 and not replace_all:
+        return (
+            f"Error: old_string appears {count} times in {target}; it must match exactly once. "
+            "Include more surrounding context to make it unique, or pass replace_all=true."
+        )
+
+    try:
+        _backup_existing(target)
+        new_text = text.replace(old, new) if replace_all else text.replace(old, new, 1)
+        target.write_text(new_text, encoding="utf-8")
+    except Exception as e:
+        return f"Error writing file: {e}"
+
+    n = count if replace_all else 1
+    return f"Successfully replaced {n} occurrence(s) in {target}"
+
+
+def delete_file(inp: Dict[str, Any]) -> str:
+    """Delete a file or folder by sending it to the OS trash (recoverable)."""
+    raw = str(inp.get("path", ""))
+    if not raw:
+        return "Error: 'path' is required"
+
+    target = Path(os.path.expanduser(raw))
+    if not _is_write_allowed(target):
+        return _write_denied_msg(target)
+    if not target.exists():
+        return f"Error: path not found: {target}"
+
+    # Preferred: OS recycle bin / trash via send2trash.
+    try:
+        from send2trash import send2trash
+        send2trash(str(target.resolve()))
+        return f"Moved to trash/recycle bin (recoverable): {target}"
+    except ImportError:
+        pass  # fall back to an in-project trash folder
+    except Exception as e:
+        return f"Error moving to trash: {e}"
+
+    try:
+        trash_dir = Path(".gemma") / "trash"
+        trash_dir.mkdir(parents=True, exist_ok=True)
+        ts = datetime.now().strftime("%Y%m%d-%H%M%S")
+        shutil.move(str(target), str(trash_dir / f"{target.name}.{ts}"))
+        return f"Moved to {trash_dir} (recoverable; send2trash not installed): {target}"
+    except Exception as e:
+        return f"Error deleting: {e}"
 
 
 def glob_files(inp: Dict[str, Any]) -> str:

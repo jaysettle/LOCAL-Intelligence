@@ -26,6 +26,10 @@ from .agent import run_turn
 from .config import load_config, write_default_config, apply_to_tools, CONFIG_PATH
 from .render import Renderer
 from .sysprompt import build_system_prompt
+from .sessions import (
+    new_session_path, save_session, latest_session, load_session,
+    list_sessions, summarize,
+)
 
 
 def _preflight(cfg: Dict, console: Console) -> None:
@@ -52,12 +56,14 @@ def _run_once(cfg, messages, console, renderer, text, images=None) -> None:
     renderer.consume(events)
 
 
-def _repl(cfg: Dict, messages: List[Dict], console: Console, renderer: Renderer) -> int:
-    import os
+def _repl(cfg: Dict, messages: List[Dict], console: Console, renderer: Renderer, session_path) -> int:
     console.print(f"[bold]LOCAL-Intelligence[/bold] [dim]v{__version__}[/dim] — model [cyan]{cfg['model']}[/cyan]")
     console.print(f"[dim]working dir:[/dim] [green]{os.getcwd()}[/green]")
     console.print("[dim]Type your message. /help for commands, /exit to quit.[/dim]\n")
     _preflight(cfg, console)
+
+    def persist():
+        save_session(session_path, messages, cfg["model"])
 
     while True:
         try:
@@ -80,6 +86,9 @@ def _repl(cfg: Dict, messages: List[Dict], console: Console, renderer: Renderer)
                     "[dim]/clear — reset conversation\n"
                     "/model <tag> — switch model\n"
                     "/image <path> <prompt> — attach an image\n"
+                    "/save — save this session now\n"
+                    "/sessions — list saved sessions in this folder\n"
+                    "/resume [name] — load the latest (or named) session\n"
                     "/exit — quit[/dim]"
                 )
                 continue
@@ -94,16 +103,52 @@ def _repl(cfg: Dict, messages: List[Dict], console: Console, renderer: Renderer)
                     cfg["model"] = parts[1]
                     console.print(f"[dim]model set to {cfg['model']}[/dim]")
                 continue
+            if cmd == "/save":
+                persist()
+                console.print(f"[dim]saved {session_path.name}[/dim]")
+                continue
+            if cmd == "/sessions":
+                sessions = list_sessions()
+                if not sessions:
+                    console.print("[dim]no saved sessions in this folder[/dim]")
+                else:
+                    for p, meta in sessions[:15]:
+                        console.print(f"[dim]{summarize(p, meta)}[/dim]")
+                continue
+            if cmd == "/resume":
+                if len(parts) >= 2:
+                    target = session_dir_lookup(parts[1])
+                else:
+                    target = latest_session()
+                if not target:
+                    console.print("[red]no matching session[/red]")
+                    continue
+                prior = load_session(target)
+                messages[:] = [messages[0]] + prior
+                console.print(f"[dim]resumed {target.name} ({len(prior)} messages)[/dim]")
+                continue
             if cmd == "/image":
                 if len(parts) < 3:
                     console.print("[red]usage: /image <path> <prompt>[/red]")
                     continue
                 _run_once(cfg, messages, console, renderer, parts[2], images=[parts[1]])
+                persist()
                 continue
             console.print(f"[red]unknown command: {cmd}[/red] [dim](/help)[/dim]")
             continue
 
         _run_once(cfg, messages, console, renderer, line)
+        persist()
+
+
+def session_dir_lookup(name: str):
+    """Resolve a session name/filename to a path in this folder's session dir."""
+    from .sessions import session_dir
+    d = session_dir()
+    for cand in (d / name, d / f"{name}.json"):
+        if cand.exists():
+            return cand
+    return None
 
 
 def _ensure_utf8_output() -> None:
@@ -136,6 +181,8 @@ def main(argv: Optional[List[str]] = None) -> int:
     parser.add_argument("--no-thinking", action="store_true", help="Hide the model's reasoning output.")
     parser.add_argument("--verbose", action="store_true", help="Show full tool results, not previews.")
     parser.add_argument("--setup-config", action="store_true", help="Write a default config.yaml and exit.")
+    parser.add_argument("--resume", "--continue", dest="resume", action="store_true",
+                        help="Resume the most recent session in this folder.")
     parser.add_argument("--version", action="version", version=f"LOCAL-Intelligence {__version__}")
     args = parser.parse_args(argv)
 
@@ -178,14 +225,27 @@ def main(argv: Optional[List[str]] = None) -> int:
     messages: List[Dict] = [{"role": "system", "content": build_system_prompt(cfg)}]
     renderer = Renderer(console, show_thinking=cfg.get("show_thinking", True), verbose=args.verbose)
 
+    # Resume the latest session in this folder, or start a fresh one.
+    session_path = None
+    if args.resume:
+        session_path = latest_session()
+        if session_path:
+            prior = load_session(session_path)
+            if prior:
+                messages.extend(prior)
+                console.print(f"[dim]resumed {session_path.name} ({len(prior)} messages)[/dim]")
+    if session_path is None:
+        session_path = new_session_path()
+
     if not repl_mode and inline_prompt:
         _run_once(cfg, messages, console, renderer, inline_prompt, images=args.image)
+        save_session(session_path, messages, cfg["model"])
         return 0
 
     if args.image:
         console.print("[yellow]--image is only used with a one-shot prompt. Ignoring.[/yellow]")
 
-    return _repl(cfg, messages, console, renderer)
+    return _repl(cfg, messages, console, renderer, session_path)
 
 
 if __name__ == "__main__":

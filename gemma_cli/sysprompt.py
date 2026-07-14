@@ -23,13 +23,15 @@ Environment facts:
 Tool discipline:
 - For ANY question about files, folders, code, or system state: call a tool. Never guess file contents — read them.
 - Use full paths. If unsure a path exists, check with list_directory or glob first.
-- To modify a file, read it first, then write_file the complete updated content.
-- To delete or move files, or run programs, use the shell tool ({shell_name}).
+- To change PART of an existing file, read it first, then use edit_file (exact string replacement). Only use write_file for brand-new files or a full rewrite — never regenerate a whole large file to change a few lines.
+- To delete files, use delete_file (it goes to the recycle bin and is recoverable) rather than shell rm/Remove-Item.
+- To run programs or other system actions, use the shell tool ({shell_name}).
 - After creating or editing a file, verify it (read it back or list the directory).
 - Keep shell commands short and non-interactive.
 - For current information from the internet (news, versions, prices, docs, anything after your training data): use web_search, then web_fetch the 1-2 most promising URLs. Cite the source URLs. Your training data is stale — when in doubt about anything time-sensitive, search.
+- When you learn a durable fact about this project or the user's preferences, call `remember` so you keep it across sessions.
 - When the task is complete, stop calling tools and give a concise summary with full paths.
-
+{memory_block}
 Formatting: reply in markdown — short paragraphs, bullets, headers and code blocks where helpful.
 """
 
@@ -49,6 +51,21 @@ def _dir_listing(path: str, limit: int = 40) -> str:
     if len(entries) > limit:
         lines.append(f"  ... (+{len(entries) - limit} more)")
     return "\n".join(lines)
+
+
+def _memory_block(cfg: Dict[str, Any]) -> str:
+    """Inject project (GEMMA.md) and global memory into the prompt when present."""
+    from .tools.memory_tools import read_memory
+    parts = []
+    proj = read_memory("project").strip()
+    glob_mem = read_memory("global").strip()
+    if glob_mem:
+        parts.append("What you remember about this user/machine (global memory):\n" + glob_mem)
+    if proj:
+        parts.append("Notes about THIS project (from GEMMA.md):\n" + proj)
+    if not parts:
+        return ""
+    return "\n" + "\n\n".join(parts) + "\n"
 
 
 def build_system_prompt(cfg: Dict[str, Any]) -> str:
@@ -78,4 +95,5 @@ def build_system_prompt(cfg: Dict[str, Any]) -> str:
         shell_name=shell_name,
         home=str(Path.home()),
         roots=roots,
+        memory_block=_memory_block(cfg),
     )
