@@ -1,0 +1,23 @@
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "local-intelligence"
+version = "0.1.0"
+description = "LOCAL-Intelligence — a fully local, offline command-line AI agent with real filesystem, shell, web-search and vision tools, powered by Ollama + Gemma."
+readme = "README.md"
+requires-python = ">=3.10"
+license = { text = "MIT" }
+authors = [{ name = "Jay Settle" }]
+dependencies = [
+    "requests>=2.28",
+    "rich>=13.0",
+    "pyyaml>=6.0",
+]
+
+[project.scripts]
+gemma = "gemma_cli.main:main"
+
+[tool.setuptools.packages.find]
+include = ["gemma_cli*"]

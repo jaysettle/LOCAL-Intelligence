@@ -1,0 +1,8 @@
+# Keep shell scripts LF so bash doesn't choke on CRLF (\r) on Linux/macOS.
+*.sh text eol=lf
+# PowerShell is fine with CRLF and it's Windows-native.
+*.ps1 text eol=crlf
+# Python: let Git normalize to LF in the repo.
+*.py text eol=lf
+*.md text
+*.toml text eol=lf
