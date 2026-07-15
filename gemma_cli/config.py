@@ -31,9 +31,25 @@ DEFAULTS: Dict[str, Any] = {
     "keep_alive": "30m",
     "max_tool_iterations": 25,
     "show_thinking": True,
-    # None => defaults to [home, tempdir] at load time
+    # None => defaults to [home, tempdir, cwd] at load time
     "allowed_write_roots": None,
     "timeout": 600,
+    # Memory
+    "project_memory_file": "GEMMA.md",
+    "global_memory_file": None,  # None => <config_dir>/memory.md
+    # Reliability
+    "compact_at_ratio": 0.75,   # summarize old turns past this fraction of num_ctx
+    # Safety: none | writes | all  (which tool categories need y/n approval)
+    "approve": "none",
+    # Optional smaller model for internal utility calls (compaction, titles)
+    "fast_model": None,
+    # Interactive status line (below the input): shows folder + live GPU/CPU/VRAM
+    "status_line": True,
+    "status_segments": ["folder", "gpu", "vram", "cpu", "model"],
+    "status_refresh": 0.5,
+    # Experimental live REPL (type-ahead queue + Esc-cancel + live status line).
+    # Off by default: the simple line-by-line reader is the reliable default.
+    "live_repl": False,
 }
 
 _ENV_MAP = {
@@ -84,6 +100,10 @@ def load_config(overrides: Dict[str, Any] | None = None) -> Dict[str, Any]:
     if cwd not in cfg["allowed_write_roots"]:
         cfg["allowed_write_roots"] = list(cfg["allowed_write_roots"]) + [cwd]
 
+    # Resolve the default global memory path if not set explicitly.
+    if not cfg.get("global_memory_file"):
+        cfg["global_memory_file"] = str(config_dir() / "memory.md")
+
     return cfg
 
 
@@ -103,6 +123,7 @@ def write_default_config() -> Path:
 
 def apply_to_tools(cfg: Dict[str, Any]) -> None:
     """Push runtime config into the tool modules."""
-    from .tools import file_tools, web_tools
+    from .tools import file_tools, web_tools, memory_tools
     file_tools.set_allowed_write_roots([Path(p) for p in cfg["allowed_write_roots"]])
     web_tools.set_searxng_url(cfg["searxng_url"])
+    memory_tools.configure(cfg.get("project_memory_file", "GEMMA.md"), cfg.get("global_memory_file", ""))

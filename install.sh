@@ -3,12 +3,14 @@
 # Installs Ollama + the Gemma model, the `gemma` CLI, a default config,
 # and (optionally) a local SearXNG container for web search.
 #
-# Usage: ./install.sh [--model gemma4:12b] [--skip-model] [--skip-search]
+# Usage: ./install.sh [--model gemma4:12b] [--skip-model] [--skip-search] [--skip-update]
+# Safe to re-run: self-updates from git, skips large downloads already present.
 set -euo pipefail
 
 MODEL="gemma4:12b"
 SKIP_MODEL=0
 SKIP_SEARCH=0
+SKIP_UPDATE=0
 REPO_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 while [ $# -gt 0 ]; do
@@ -16,6 +18,7 @@ while [ $# -gt 0 ]; do
     --model) MODEL="$2"; shift 2 ;;
     --skip-model) SKIP_MODEL=1; shift ;;
     --skip-search) SKIP_SEARCH=1; shift ;;
+    --skip-update) SKIP_UPDATE=1; shift ;;
     *) echo "Unknown option: $1"; exit 1 ;;
   esac
 done
@@ -26,6 +29,20 @@ warn() { printf '\033[33m  !! %s\033[0m\n' "$1"; }
 have() { command -v "$1" >/dev/null 2>&1; }
 
 echo; echo "LOCAL-Intelligence installer"; echo "----------------------------"
+
+# 0. Self-update from the repo's branch, re-exec if the script itself changed.
+if [ "$SKIP_UPDATE" -eq 0 ] && have git && [ -d "$REPO_DIR/.git" ]; then
+  info "Updating code from git ($(git -C "$REPO_DIR" rev-parse --abbrev-ref HEAD 2>/dev/null))"
+  before="$(git -C "$REPO_DIR" rev-parse HEAD 2>/dev/null || echo x)"
+  git -C "$REPO_DIR" pull --ff-only || warn "git pull failed (continuing with local code)"
+  after="$(git -C "$REPO_DIR" rev-parse HEAD 2>/dev/null || echo y)"
+  if [ "$before" != "$after" ]; then
+    info "Code updated - re-running the new installer"
+    exec bash "$REPO_DIR/install.sh" --skip-update --model "$MODEL" \
+      $([ "$SKIP_MODEL" -eq 1 ] && echo --skip-model) \
+      $([ "$SKIP_SEARCH" -eq 1 ] && echo --skip-search)
+  fi
+fi
 
 # 1. Ollama  (need >= 0.32 for gemma4)
 MIN_OLLAMA="0.32.0"
@@ -92,11 +109,14 @@ elif have docker; then
     docker run -d --name searxng -p 8899:8080 -v searxng-data:/etc/searxng --restart unless-stopped searxng/searxng >/dev/null
     sleep 8
   fi
-  if ! docker exec searxng cat /etc/searxng/settings.yml 2>/dev/null | grep -q 'format'; then
-    docker exec searxng sh -c "printf '\nsearch:\n  formats:\n    - html\n    - json\n' >> /etc/searxng/settings.yml" 2>/dev/null || true
-    docker restart searxng >/dev/null; sleep 6
-  fi
-  curl -fsS "http://localhost:8899/search?q=test&format=json" >/dev/null 2>&1 && ok "SearXNG responding on :8899" || warn "SearXNG not responding yet."
+  # Write a known-good settings.yml (JSON API on, limiter off). Newer images ship
+  # a settings.yml already containing "format", so a naive append is skipped and
+  # the JSON API returns 403; overwriting is reliable across image versions.
+  printf 'use_default_settings: true\nserver:\n  secret_key: "localintelligence-searxng"\n  limiter: false\n  image_proxy: true\nsearch:\n  formats:\n    - html\n    - json\n' \
+    | docker exec -i searxng sh -c 'cat > /etc/searxng/settings.yml' 2>/dev/null || true
+  docker restart searxng >/dev/null; sleep 6
+  code="$(curl -s -o /dev/null -w '%{http_code}' "http://localhost:8899/search?q=test&format=json" 2>/dev/null || echo 0)"
+  [ "$code" = "200" ] && ok "SearXNG responding (JSON API) on :8899" || warn "SearXNG not ready yet (HTTP $code); retry in a minute."
 else
   warn "Docker not found - skipping web search. Install Docker and re-run to enable it."
 fi

@@ -9,11 +9,16 @@ streaming text, thinking, and tool activity however it likes:
     ("text",         str)   incremental assistant answer tokens
     ("tool_start",   dict)  {"name","args"} — a tool is about to run
     ("tool_result",  dict)  {"name","args","result"} — tool finished
+    ("notice",       str)   a dim status line (compaction, loop warnings)
     ("error",        str)   fatal error message
     ("done",         None)  turn complete
 
 The conversation `messages` list is mutated in place so callers keep history
 across turns. Images (base64) attach to the next user message.
+
+Small-model reliability harness (context compaction, malformed tool-call rescue,
+loop detection, empty-turn nudge) is inspired by patterns in the MIT-licensed
+lutelute/local-cli project.
 """
 
 import base64
@@ -28,6 +33,7 @@ from .tools import OLLAMA_TOOLS, execute_tool
 Event = Tuple[str, Any]
 
 _IMAGE_EXTS = (".png", ".jpg", ".jpeg", ".gif", ".webp")
+_CHARS_PER_TOKEN = 4  # rough heuristic for the compaction budget
 
 
 class AgentError(Exception):
@@ -57,21 +63,95 @@ def _parse_args(raw) -> Dict:
     return {}
 
 
+def _chat_once(cfg: Dict[str, Any], messages: List[Dict], model: str) -> str:
+    """A single non-streaming completion (used for compaction summaries)."""
+    url = f"{cfg['ollama_url'].rstrip('/')}/api/chat"
+    payload = {
+        "model": model,
+        "messages": messages,
+        "stream": False,
+        "keep_alive": cfg.get("keep_alive", "30m"),
+        "options": {"num_ctx": int(cfg.get("num_ctx", 32768))},
+    }
+    resp = requests.post(url, json=payload, timeout=int(cfg.get("timeout", 600)))
+    resp.raise_for_status()
+    return (resp.json().get("message") or {}).get("content", "")
+
+
+def _maybe_compact(cfg: Dict[str, Any], messages: List[Dict]) -> Optional[str]:
+    """Summarize old turns when the transcript nears the context budget.
+
+    Cuts at the last user-message boundary so a tool message is never orphaned
+    from its assistant tool_calls. Returns a notice string if it compacted.
+    """
+    num_ctx = int(cfg.get("num_ctx", 32768))
+    ratio = float(cfg.get("compact_at_ratio", 0.75))
+    budget_chars = num_ctx * _CHARS_PER_TOKEN * ratio
+
+    total = sum(len(str(m.get("content", ""))) for m in messages)
+    if total < budget_chars or len(messages) < 8:
+        return None
+
+    last_user = max((i for i, m in enumerate(messages) if m.get("role") == "user"), default=None)
+    if last_user is None or last_user <= 1:
+        return None
+    middle = messages[1:last_user]
+    if len(middle) < 4:
+        return None
+
+    convo = "\n".join(f"{m.get('role')}: {m.get('content', '')}" for m in middle if m.get("content"))
+    prompt = (
+        "Summarize this earlier part of a conversation in 5-8 concise bullet points. "
+        "Preserve decisions made, file paths touched, and any facts needed to continue:\n\n" + convo
+    )
+    model = cfg.get("fast_model") or cfg["model"]
+    try:
+        summary = _chat_once(cfg, [{"role": "user", "content": prompt}], model)
+    except Exception:
+        return None  # compaction is best-effort; keep going uncompacted
+    if not summary.strip():
+        return None
+
+    messages[:] = (
+        [messages[0], {"role": "system", "content": "[Summary of earlier conversation]\n" + summary}]
+        + messages[last_user:]
+    )
+    return f"compacted {len(middle)} earlier messages to fit the context window"
+
+
 def run_turn(
     cfg: Dict[str, Any],
     messages: List[Dict],
     user_text: str,
     image_paths: Optional[List[str]] = None,
+    approver=None,
+    cancel=None,
 ) -> Iterator[Event]:
-    """Run one user turn to completion (through any number of tool calls)."""
+    """Run one user turn to completion (through any number of tool calls).
+
+    approver: optional callable (name, args) -> bool. When set, mutating tools
+    (write_file, edit_file, delete_file, shell) are gated on its approval.
+    cancel: optional threading.Event. When set mid-turn, the current response is
+    stopped cooperatively (the HTTP stream is closed) and the turn ends.
+    """
+    def _cancelled() -> bool:
+        return cancel is not None and cancel.is_set()
     user_msg: Dict[str, Any] = {"role": "user", "content": user_text}
     images = encode_images(image_paths)
     if images:
         user_msg["images"] = images
     messages.append(user_msg)
 
+    notice = _maybe_compact(cfg, messages)
+    if notice:
+        yield ("notice", notice)
+
     url = f"{cfg['ollama_url'].rstrip('/')}/api/chat"
     max_iters = int(cfg.get("max_tool_iterations", 25))
+    mutating = {"write_file", "edit_file", "delete_file", "shell"}
+
+    recent_sigs: List[str] = []  # for loop detection
+    empty_nudges = 0
 
     for _iteration in range(max_iters):
         payload = {
@@ -98,6 +178,15 @@ def run_turn(
 
         try:
             for line in resp.iter_lines():
+                if _cancelled():
+                    try:
+                        resp.close()
+                    except Exception:
+                        pass
+                    messages.append({"role": "assistant", "content": content_acc})
+                    yield ("notice", "stopped")
+                    yield ("done", None)
+                    return
                 if not line:
                     continue
                 try:
@@ -127,11 +216,20 @@ def run_turn(
             return
 
         if not tool_calls:
+            # Empty turn (no answer, no tools): nudge once before giving up.
+            if not content_acc.strip() and empty_nudges < 1:
+                empty_nudges += 1
+                messages.append({"role": "assistant", "content": ""})
+                messages.append({
+                    "role": "user",
+                    "content": "You returned nothing. Either call a tool to make progress or give your final answer now.",
+                })
+                continue
             messages.append({"role": "assistant", "content": content_acc})
             yield ("done", None)
             return
 
-        # Record assistant turn (with its tool calls) so the model sees its own actions.
+        # Record the assistant turn (with its tool calls) so the model sees its own actions.
         messages.append({
             "role": "assistant",
             "content": content_acc,
@@ -139,7 +237,44 @@ def run_turn(
         })
 
         for t in tool_calls:
+            if _cancelled():
+                yield ("notice", "stopped")
+                yield ("done", None)
+                return
             name, args = t["name"], t["args"]
+
+            # Rescue malformed tool-call arguments (bad JSON) instead of executing garbage.
+            if isinstance(args, dict) and "_raw" in args:
+                yield ("tool_start", {"name": name, "args": args})
+                result = (
+                    "Error: your tool arguments were not valid JSON. Re-issue the call with a "
+                    "proper JSON object for the arguments."
+                )
+                yield ("tool_result", {"name": name, "args": args, "result": result})
+                messages.append({"role": "tool", "tool_name": name, "content": result})
+                continue
+
+            # Loop detection: same call+args repeated too many times.
+            sig = name + "|" + json.dumps(args, sort_keys=True, ensure_ascii=False)
+            recent_sigs.append(sig)
+            if recent_sigs.count(sig) >= 3:
+                result = (
+                    "Notice: you have already run this exact tool call twice with no change in result. "
+                    "Stop repeating it — try a different approach or give your final answer."
+                )
+                yield ("notice", f"loop detected on {name}; nudging the model to change approach")
+                yield ("tool_result", {"name": name, "args": args, "result": result})
+                messages.append({"role": "tool", "tool_name": name, "content": result})
+                continue
+
+            # Approval gate for mutating actions.
+            if approver is not None and name in mutating:
+                if not approver(name, args):
+                    result = "The user declined to run this action."
+                    yield ("tool_result", {"name": name, "args": args, "result": result})
+                    messages.append({"role": "tool", "tool_name": name, "content": result})
+                    continue
+
             yield ("tool_start", {"name": name, "args": args})
             result = execute_tool(name, args)
             yield ("tool_result", {"name": name, "args": args, "result": result})
