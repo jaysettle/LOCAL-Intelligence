@@ -233,6 +233,53 @@ def _repl_plain(cfg, messages, console, renderer, session_path, approver=None) -
 # Interactive REPL (live input, type-ahead queue, Esc-cancel, status line)
 # ---------------------------------------------------------------------------
 
+def _consume_plain(events, show_thinking=True) -> str:
+    """Render an event stream with plain print() — reliable under patch_stdout
+    and from a background thread, where rich's output gets swallowed."""
+    mode = None
+    answer = []
+    for kind, payload in events:
+        if kind == "think":
+            if not show_thinking:
+                continue
+            if mode != "think":
+                print("\nthinking: ", end="", flush=True)
+                mode = "think"
+            print(payload, end="", flush=True)
+        elif kind == "text":
+            if mode is not None and mode != "text":
+                print(flush=True)
+            mode = "text"
+            answer.append(payload)
+            print(payload, end="", flush=True)
+        elif kind == "tool_start":
+            if mode is not None:
+                print(flush=True)
+            mode = None
+            a = payload.get("args", {}) or {}
+            prev = a.get("path") or a.get("command") or a.get("pattern") or a.get("url") or a.get("query") or ""
+            print(f"* {payload['name']} {str(prev)[:80]}", flush=True)
+        elif kind == "tool_result":
+            r = payload.get("result", "") or ""
+            first = r.strip().splitlines()[0] if r.strip() else "(no output)"
+            print(f"  {first[:120]}", flush=True)
+        elif kind == "notice":
+            if mode is not None:
+                print(flush=True)
+            mode = None
+            print(f"- {payload}", flush=True)
+        elif kind == "error":
+            if mode is not None:
+                print(flush=True)
+            mode = None
+            print(f"Error: {payload}", flush=True)
+        elif kind == "done":
+            if mode is not None:
+                print(flush=True)
+            mode = None
+    return "".join(answer)
+
+
 def _repl_interactive(cfg, messages, console, renderer, session_path, approver=None) -> int:
     import queue as _queue
     import threading
@@ -281,9 +328,9 @@ def _repl_interactive(cfg, messages, console, renderer, session_path, approver=N
             st.start()
             try:
                 events = run_turn(cfg, messages, text, image_paths=images, approver=approver, cancel=cancel)
-                renderer.consume(events)
+                _consume_plain(events, show_thinking=cfg.get("show_thinking", True))
             except Exception as e:
-                console.print(f"[red]error: {e}[/red]")
+                print(f"error: {e}", flush=True)
             finally:
                 stop_sampler.set()
                 state["busy"] = False
@@ -325,7 +372,7 @@ def _repl_interactive(cfg, messages, console, renderer, session_path, approver=N
 
     def enqueue(text, images):
         if state["busy"]:
-            console.print(f"[dim]queued ({work.qsize() + 1})[/dim]")
+            print(f"queued ({work.qsize() + 1})", flush=True)
         work.put((text, images))
 
     with patch_stdout():
@@ -352,7 +399,7 @@ def _repl_interactive(cfg, messages, console, renderer, session_path, approver=N
             enqueue(line, None)
 
     work.put(None)
-    console.print("[dim]bye[/dim]")
+    print("bye", flush=True)
     return 0
 
 
@@ -390,6 +437,8 @@ def main(argv: Optional[List[str]] = None) -> int:
                         help="Resume the most recent session in this folder.")
     parser.add_argument("--approve", choices=["none", "writes", "all"],
                         help="Require y/N approval before mutating actions (file writes/edits/deletes, shell).")
+    parser.add_argument("--live", action="store_true",
+                        help="Experimental live REPL: type-ahead queue, Esc-cancel, live status line.")
     parser.add_argument("--version", action="version", version=f"LOCAL-Intelligence {__version__}")
     args = parser.parse_args(argv)
 
@@ -456,10 +505,12 @@ def main(argv: Optional[List[str]] = None) -> int:
     if args.image:
         console.print("[yellow]--image is only used with a one-shot prompt. Ignoring.[/yellow]")
 
-    # Interactive live REPL when we own a real terminal and there's no approval
-    # gate (approval prompts need synchronous stdin, which the live loop can't
-    # share). Otherwise the plain reader.
-    if is_tty and approver is None:
+    # Default: the simple, reliable line-by-line reader (renders answers cleanly).
+    # The experimental live REPL (type-ahead queue / Esc-cancel / live status line)
+    # is opt-in via --live or live_repl in config, and needs a real terminal and
+    # no approval gate.
+    want_live = args.live or cfg.get("live_repl", False)
+    if want_live and is_tty and approver is None:
         return _repl_interactive(cfg, messages, console, renderer, session_path, approver=approver)
     return _repl_plain(cfg, messages, console, renderer, session_path, approver=approver)
 
