@@ -241,6 +241,12 @@ def _repl_interactive(cfg, messages, console, renderer, session_path, approver=N
     from prompt_toolkit.patch_stdout import patch_stdout
     from . import statusline
 
+    # rich's color codes leak as literal ANSI ("?[2m ... ?[0m") under
+    # prompt_toolkit's patch_stdout, so this interactive path renders WITHOUT
+    # color. (Color still works in one-shot and the plain reader.)
+    console = Console(no_color=True, force_terminal=False)
+    renderer = Renderer(console, show_thinking=renderer.show_thinking, verbose=renderer.verbose)
+
     _banner(cfg, console)
     console.print(
         "[dim]Enter to send. Type while it answers to queue the next prompt. "
