@@ -3,7 +3,7 @@
 LOCAL-Intelligence CLI entry point.
 
   gemma go                      interactive chat session in the current folder
-  gemma go C:\path\to\project   interactive chat session in a specific folder
+  gemma go C:\\path\\to\\project interactive chat session in a specific folder
   gemma                         interactive chat session (same as `go`)
   gemma "quick question"        one-shot, prints answer and exits
   gemma -p "prompt"             one-shot (explicit flag form)
@@ -11,7 +11,10 @@ LOCAL-Intelligence CLI entry point.
   gemma --model gemma4:e4b      override model for this run
   gemma --setup-config          write a default config.yaml and exit
 
-REPL commands: /clear  /model <tag>  /image <path> <prompt>  /help  /exit
+Interactive REPL: input stays live while it answers; type + Enter to queue the
+next prompt; Esc stops the current answer; Alt+V pastes a clipboard image; a
+status line under the input shows the folder + GPU/CPU/VRAM while it works.
+REPL commands: /paste /image /clear /model /save /sessions /resume /help /exit
 """
 
 import argparse
@@ -72,130 +75,9 @@ def _make_approver(console: Console):
     return approver
 
 
-def _repl(cfg: Dict, messages: List[Dict], console: Console, renderer: Renderer, session_path, approver=None) -> int:
-    console.print(f"[bold]LOCAL-Intelligence[/bold] [dim]v{__version__}[/dim] — model [cyan]{cfg['model']}[/cyan]")
-    console.print(f"[dim]working dir:[/dim] [green]{os.getcwd()}[/green]")
-    console.print("[dim]Type your message. /help for commands, /exit to quit.[/dim]\n")
-    _preflight(cfg, console)
-
-    def persist():
-        save_session(session_path, messages, cfg["model"])
-
-    pending_images: List[str] = []
-    prompt_session = _make_prompt_session(pending_images)
-    if prompt_session is not None:
-        console.print("[dim]Tip: press Alt+V to attach an image from your clipboard (Win+Shift+S to snip).[/dim]\n")
-
-    def read_line() -> str:
-        if prompt_session is not None:
-            return prompt_session.prompt("> ")
-        return console.input("[bold green]›[/bold green] ")
-
-    while True:
-        try:
-            raw = read_line()
-        except (EOFError, KeyboardInterrupt):
-            console.print("\n[dim]bye[/dim]")
-            return 0
-
-        # An Alt+V paste inserts a "[image]" marker and queues the file.
-        line = raw.replace("[image]", "").strip()
-        if pending_images:
-            imgs = list(pending_images)
-            pending_images.clear()
-            _run_once(cfg, messages, console, renderer,
-                      line or "What is in this image? Describe it.", images=imgs, approver=approver)
-            persist()
-            continue
-
-        if not line:
-            continue
-
-        if line.startswith("/"):
-            parts = line.split(maxsplit=2)
-            cmd = parts[0].lower()
-            if cmd in ("/exit", "/quit"):
-                console.print("[dim]bye[/dim]")
-                return 0
-            if cmd == "/help":
-                console.print(
-                    "[dim]/paste [prompt] — attach the image on your clipboard (Win+Shift+S to snip)\n"
-                    "/image <path> <prompt> — attach an image file\n"
-                    "/clear — reset conversation\n"
-                    "/model <tag> — switch model\n"
-                    "/save — save this session now\n"
-                    "/sessions — list saved sessions in this folder\n"
-                    "/resume [name] — load the latest (or named) session\n"
-                    "/exit — quit[/dim]"
-                )
-                continue
-            if cmd == "/clear":
-                messages[:] = [messages[0]]  # keep system prompt
-                console.print("[dim]conversation cleared[/dim]")
-                continue
-            if cmd == "/model":
-                if len(parts) < 2:
-                    console.print(f"[dim]current model: {cfg['model']}[/dim]")
-                else:
-                    cfg["model"] = parts[1]
-                    console.print(f"[dim]model set to {cfg['model']}[/dim]")
-                continue
-            if cmd == "/save":
-                persist()
-                console.print(f"[dim]saved {session_path.name}[/dim]")
-                continue
-            if cmd == "/sessions":
-                sessions = list_sessions()
-                if not sessions:
-                    console.print("[dim]no saved sessions in this folder[/dim]")
-                else:
-                    for p, meta in sessions[:15]:
-                        console.print(f"[dim]{summarize(p, meta)}[/dim]")
-                continue
-            if cmd == "/resume":
-                if len(parts) >= 2:
-                    target = session_dir_lookup(parts[1])
-                else:
-                    target = latest_session()
-                if not target:
-                    console.print("[red]no matching session[/red]")
-                    continue
-                prior = load_session(target)
-                messages[:] = [messages[0]] + prior
-                console.print(f"[dim]resumed {target.name} ({len(prior)} messages)[/dim]")
-                continue
-            if cmd == "/image":
-                if len(parts) < 3:
-                    console.print("[red]usage: /image <path> <prompt>[/red]")
-                    continue
-                _run_once(cfg, messages, console, renderer, parts[2], images=[parts[1]], approver=approver)
-                persist()
-                continue
-            if cmd == "/paste":
-                rest = line.split(maxsplit=1)
-                prompt_text = rest[1] if len(rest) > 1 else "What is in this image? Describe it."
-                path, err = _grab_clipboard_to_file()
-                if not path:
-                    console.print(f"[yellow]{err}. Snip with Win+Shift+S or copy an image, then retry.[/yellow]")
-                    continue
-                _run_once(cfg, messages, console, renderer, prompt_text, images=[path], approver=approver)
-                persist()
-                continue
-            console.print(f"[red]unknown command: {cmd}[/red] [dim](/help)[/dim]")
-            continue
-
-        _run_once(cfg, messages, console, renderer, line, approver=approver)
-        persist()
-
-
-def session_dir_lookup(name: str):
-    """Resolve a session name/filename to a path in this folder's session dir."""
-    from .sessions import session_dir
-    d = session_dir()
-    for cand in (d / name, d / f"{name}.json"):
-        if cand.exists():
-            return cand
-
+# ---------------------------------------------------------------------------
+# Clipboard helpers
+# ---------------------------------------------------------------------------
 
 def _grab_clipboard_to_file():
     """Return (path, error). A temp/real image file from the clipboard, or None.
@@ -213,13 +95,10 @@ def _grab_clipboard_to_file():
         return None, f"clipboard read failed: {e}"
     if data is None:
         return None, "no image on the clipboard"
-    # Copied image file(s) from Explorer -> list of paths.
     if isinstance(data, list):
         imgs = [p for p in data if str(p).lower().endswith((".png", ".jpg", ".jpeg", ".gif", ".webp", ".bmp"))]
         return (imgs[0], None) if imgs else (None, "clipboard has files but no image")
-    # A bitmap (snip / copied from an app) -> PIL Image; save to a temp PNG.
     try:
-        import os
         import tempfile
         fd, tmp = tempfile.mkstemp(prefix="gemma_paste_", suffix=".png")
         os.close(fd)
@@ -229,23 +108,195 @@ def _grab_clipboard_to_file():
         return None, f"could not save pasted image: {e}"
 
 
-def _make_prompt_session(pending_images: List[str]):
-    """A prompt_toolkit session with Alt+V bound to paste a clipboard image.
+# ---------------------------------------------------------------------------
+# Shared command handling
+# ---------------------------------------------------------------------------
 
-    Returns None when input isn't an interactive TTY (piped/scripted) or
-    prompt_toolkit isn't available — callers fall back to a plain reader.
-    """
-    if not sys.stdin.isatty():
-        return None
-    try:
-        from prompt_toolkit import PromptSession
-        from prompt_toolkit.key_binding import KeyBindings
-    except ImportError:
-        return None
+def session_dir_lookup(name: str):
+    """Resolve a session name/filename to a path in this folder's session dir."""
+    from .sessions import session_dir
+    d = session_dir()
+    for cand in (d / name, d / f"{name}.json"):
+        if cand.exists():
+            return cand
+
+
+_HELP = (
+    "[dim]/paste [prompt] — attach the clipboard image (Alt+V does this live)\n"
+    "/image <path> <prompt> — attach an image file\n"
+    "/clear — reset conversation\n"
+    "/model <tag> — switch model\n"
+    "/save — save this session now\n"
+    "/sessions — list saved sessions in this folder\n"
+    "/resume [name] — load the latest (or named) session\n"
+    "/exit — quit    (while answering: Esc stops it, typing queues the next)[/dim]"
+)
+
+
+def _handle_command(line, cfg, messages, console, session_path):
+    """Handle a /command. Returns (action, prompt_text, images):
+    ('exit',None,None) | ('handled',None,None) | ('run', text, [paths])."""
+    parts = line.split(maxsplit=2)
+    cmd = parts[0].lower()
+
+    if cmd in ("/exit", "/quit"):
+        return ("exit", None, None)
+    if cmd == "/help":
+        console.print(_HELP)
+        return ("handled", None, None)
+    if cmd == "/clear":
+        messages[:] = [messages[0]]
+        console.print("[dim]conversation cleared[/dim]")
+        return ("handled", None, None)
+    if cmd == "/model":
+        if len(parts) < 2:
+            console.print(f"[dim]current model: {cfg['model']}[/dim]")
+        else:
+            cfg["model"] = parts[1]
+            console.print(f"[dim]model set to {cfg['model']}[/dim]")
+        return ("handled", None, None)
+    if cmd == "/save":
+        save_session(session_path, messages, cfg["model"])
+        console.print(f"[dim]saved {session_path.name}[/dim]")
+        return ("handled", None, None)
+    if cmd == "/sessions":
+        sessions = list_sessions()
+        if not sessions:
+            console.print("[dim]no saved sessions in this folder[/dim]")
+        else:
+            for p, meta in sessions[:15]:
+                console.print(f"[dim]{summarize(p, meta)}[/dim]")
+        return ("handled", None, None)
+    if cmd == "/resume":
+        target = session_dir_lookup(parts[1]) if len(parts) >= 2 else latest_session()
+        if not target:
+            console.print("[red]no matching session[/red]")
+            return ("handled", None, None)
+        prior = load_session(target)
+        messages[:] = [messages[0]] + prior
+        console.print(f"[dim]resumed {target.name} ({len(prior)} messages)[/dim]")
+        return ("handled", None, None)
+    if cmd == "/image":
+        if len(parts) < 3:
+            console.print("[red]usage: /image <path> <prompt>[/red]")
+            return ("handled", None, None)
+        return ("run", parts[2], [parts[1]])
+    if cmd == "/paste":
+        rest = line.split(maxsplit=1)
+        prompt_text = rest[1] if len(rest) > 1 else "What is in this image? Describe it."
+        path, err = _grab_clipboard_to_file()
+        if not path:
+            console.print(f"[yellow]{err}. Snip with Win+Shift+S or copy an image, then retry.[/yellow]")
+            return ("handled", None, None)
+        return ("run", prompt_text, [path])
+
+    console.print(f"[red]unknown command: {cmd}[/red] [dim](/help)[/dim]")
+    return ("handled", None, None)
+
+
+def _banner(cfg, console) -> None:
+    console.print(f"[bold]LOCAL-Intelligence[/bold] [dim]v{__version__}[/dim] — model [cyan]{cfg['model']}[/cyan]")
+    console.print(f"[dim]working dir:[/dim] [green]{os.getcwd()}[/green]")
+
+
+# ---------------------------------------------------------------------------
+# Plain REPL (non-interactive stdin, or when approval prompts are active)
+# ---------------------------------------------------------------------------
+
+def _repl_plain(cfg, messages, console, renderer, session_path, approver=None) -> int:
+    _banner(cfg, console)
+    console.print("[dim]Type your message. /help for commands, /exit to quit.[/dim]\n")
+    _preflight(cfg, console)
+
+    while True:
+        try:
+            line = console.input("[bold green]>[/bold green] ").strip()
+        except (EOFError, KeyboardInterrupt):
+            console.print("\n[dim]bye[/dim]")
+            return 0
+        if not line:
+            continue
+        if line.startswith("/"):
+            action, ptext, imgs = _handle_command(line, cfg, messages, console, session_path)
+            if action == "exit":
+                console.print("[dim]bye[/dim]")
+                return 0
+            if action == "run":
+                _run_once(cfg, messages, console, renderer, ptext, images=imgs, approver=approver)
+                save_session(session_path, messages, cfg["model"])
+            continue
+        _run_once(cfg, messages, console, renderer, line, approver=approver)
+        save_session(session_path, messages, cfg["model"])
+
+
+# ---------------------------------------------------------------------------
+# Interactive REPL (live input, type-ahead queue, Esc-cancel, status line)
+# ---------------------------------------------------------------------------
+
+def _repl_interactive(cfg, messages, console, renderer, session_path, approver=None) -> int:
+    import queue as _queue
+    import threading
+    from prompt_toolkit import PromptSession
+    from prompt_toolkit.key_binding import KeyBindings
+    from prompt_toolkit.patch_stdout import patch_stdout
+    from . import statusline
+
+    # rich's color codes leak as literal ANSI ("?[2m ... ?[0m") under
+    # prompt_toolkit's patch_stdout, so this interactive path renders WITHOUT
+    # color. (Color still works in one-shot and the plain reader.)
+    console = Console(no_color=True, force_terminal=False)
+    renderer = Renderer(console, show_thinking=renderer.show_thinking, verbose=renderer.verbose)
+
+    _banner(cfg, console)
+    console.print(
+        "[dim]Enter to send. Type while it answers to queue the next prompt. "
+        "Esc stops the current answer. Alt+V pastes a clipboard image. /help for commands.[/dim]\n"
+    )
+    _preflight(cfg, console)
+
+    work = _queue.Queue()
+    pending_images: List[str] = []
+    state = {"busy": False, "cancel": None, "sample": None}
+    segments = cfg.get("status_segments", ["folder", "gpu", "vram", "cpu", "model"])
+    show_status = cfg.get("status_line", True)
+    refresh = float(cfg.get("status_refresh", 0.5) or 0.5)
+
+    def worker():
+        while True:
+            item = work.get()
+            if item is None:
+                return
+            text, images = item
+            cancel = threading.Event()
+            state["cancel"] = cancel
+            state["busy"] = True
+            stop_sampler = threading.Event()
+
+            def _sampler():
+                state["sample"] = statusline.sample()
+                while not stop_sampler.wait(refresh):
+                    state["sample"] = statusline.sample()
+
+            st = threading.Thread(target=_sampler, daemon=True)
+            st.start()
+            try:
+                events = run_turn(cfg, messages, text, image_paths=images, approver=approver, cancel=cancel)
+                renderer.consume(events)
+            except Exception as e:
+                console.print(f"[red]error: {e}[/red]")
+            finally:
+                stop_sampler.set()
+                state["busy"] = False
+                state["cancel"] = None
+                state["sample"] = None
+                save_session(session_path, messages, cfg["model"])
+            work.task_done()
+
+    threading.Thread(target=worker, daemon=True).start()
 
     kb = KeyBindings()
 
-    @kb.add("escape", "v")  # Alt+V (Meta+V is sent as ESC then v)
+    @kb.add("escape", "v")  # Alt+V: paste a clipboard image
     def _paste(event):
         path, _err = _grab_clipboard_to_file()
         if path:
@@ -254,8 +305,55 @@ def _make_prompt_session(pending_images: List[str]):
         else:
             event.app.output.bell()
 
-    return PromptSession(key_bindings=kb)
-    return None
+    @kb.add("escape")  # Esc: stop the current response (queue survives)
+    def _cancel(event):
+        c = state["cancel"]
+        if c is not None:
+            c.set()
+
+    def toolbar():
+        try:
+            return statusline.render(segments, state["sample"], cfg["model"], os.getcwd(), state["busy"])
+        except Exception:
+            return ""
+
+    session = PromptSession(
+        key_bindings=kb,
+        bottom_toolbar=(toolbar if show_status else None),
+        refresh_interval=(refresh if show_status else None),
+    )
+
+    def enqueue(text, images):
+        if state["busy"]:
+            console.print(f"[dim]queued ({work.qsize() + 1})[/dim]")
+        work.put((text, images))
+
+    with patch_stdout():
+        while True:
+            try:
+                raw = session.prompt("> ")
+            except (EOFError, KeyboardInterrupt):
+                break
+            line = raw.replace("[image]", "").strip()
+            if pending_images:
+                imgs = list(pending_images)
+                pending_images.clear()
+                enqueue(line or "What is in this image? Describe it.", imgs)
+                continue
+            if not line:
+                continue
+            if line.startswith("/"):
+                action, ptext, imgs = _handle_command(line, cfg, messages, console, session_path)
+                if action == "exit":
+                    break
+                if action == "run":
+                    enqueue(ptext, imgs)
+                continue
+            enqueue(line, None)
+
+    work.put(None)
+    console.print("[dim]bye[/dim]")
+    return 0
 
 
 def _ensure_utf8_output() -> None:
@@ -295,7 +393,8 @@ def main(argv: Optional[List[str]] = None) -> int:
     parser.add_argument("--version", action="version", version=f"LOCAL-Intelligence {__version__}")
     args = parser.parse_args(argv)
 
-    console = Console()
+    is_tty = sys.stdin.isatty()
+    console = Console(force_terminal=True) if is_tty else Console()
 
     if args.setup_config:
         path = write_default_config()
@@ -357,7 +456,12 @@ def main(argv: Optional[List[str]] = None) -> int:
     if args.image:
         console.print("[yellow]--image is only used with a one-shot prompt. Ignoring.[/yellow]")
 
-    return _repl(cfg, messages, console, renderer, session_path, approver=approver)
+    # Interactive live REPL when we own a real terminal and there's no approval
+    # gate (approval prompts need synchronous stdin, which the live loop can't
+    # share). Otherwise the plain reader.
+    if is_tty and approver is None:
+        return _repl_interactive(cfg, messages, console, renderer, session_path, approver=approver)
+    return _repl_plain(cfg, messages, console, renderer, session_path, approver=approver)
 
 
 if __name__ == "__main__":

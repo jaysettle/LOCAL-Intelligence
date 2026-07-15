@@ -119,8 +119,26 @@ gemma --no-thinking                    # hide the model's reasoning
 gemma --verbose                        # show full tool output
 ```
 
-REPL commands: `/clear` (reset), `/model <tag>` (switch), `/image <path> <prompt>`,
-`/save`, `/resume [name]`, `/sessions`, `/help`, `/exit`.
+REPL commands: `/paste`, `/image <path> <prompt>`, `/clear` (reset),
+`/model <tag>` (switch), `/save`, `/resume [name]`, `/sessions`, `/help`, `/exit`.
+
+### Live interactive REPL
+
+When you run `gemma go` in a real terminal, the input stays live while the model
+answers:
+
+- **Type-ahead queue** — start typing your next prompt while it's still
+  responding; press Enter and it queues, running as soon as the current answer
+  finishes.
+- **Esc** — stops the current response (any queued prompts still run).
+- **Alt+V** — pastes an image from your clipboard (snip with **Win+Shift+S**,
+  then Alt+V), or use `/paste`.
+- **Status line** — under the input, shows the working folder plus live
+  **GPU / VRAM / CPU** usage while it's working (needs `nvidia-smi` for GPU; shows
+  `n/a` otherwise). Configure via `status_line`, `status_segments`, and
+  `status_refresh` in `config.yaml`.
+
+(Piped/scripted input, and `--approve` mode, use a simpler line-by-line reader.)
 
 The folder you launch in is automatically added to the writable roots, so the
 agent can create and edit files in your project — but not outside the allowed

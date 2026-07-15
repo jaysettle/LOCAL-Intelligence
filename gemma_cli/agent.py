@@ -125,12 +125,17 @@ def run_turn(
     user_text: str,
     image_paths: Optional[List[str]] = None,
     approver=None,
+    cancel=None,
 ) -> Iterator[Event]:
     """Run one user turn to completion (through any number of tool calls).
 
     approver: optional callable (name, args) -> bool. When set, mutating tools
     (write_file, edit_file, delete_file, shell) are gated on its approval.
+    cancel: optional threading.Event. When set mid-turn, the current response is
+    stopped cooperatively (the HTTP stream is closed) and the turn ends.
     """
+    def _cancelled() -> bool:
+        return cancel is not None and cancel.is_set()
     user_msg: Dict[str, Any] = {"role": "user", "content": user_text}
     images = encode_images(image_paths)
     if images:
@@ -173,6 +178,15 @@ def run_turn(
 
         try:
             for line in resp.iter_lines():
+                if _cancelled():
+                    try:
+                        resp.close()
+                    except Exception:
+                        pass
+                    messages.append({"role": "assistant", "content": content_acc})
+                    yield ("notice", "stopped")
+                    yield ("done", None)
+                    return
                 if not line:
                     continue
                 try:
@@ -223,6 +237,10 @@ def run_turn(
         })
 
         for t in tool_calls:
+            if _cancelled():
+                yield ("notice", "stopped")
+                yield ("done", None)
+                return
             name, args = t["name"], t["args"]
 
             # Rescue malformed tool-call arguments (bad JSON) instead of executing garbage.
