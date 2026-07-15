@@ -437,6 +437,8 @@ def main(argv: Optional[List[str]] = None) -> int:
                         help="Resume the most recent session in this folder.")
     parser.add_argument("--approve", choices=["none", "writes", "all"],
                         help="Require y/N approval before mutating actions (file writes/edits/deletes, shell).")
+    parser.add_argument("--live", action="store_true",
+                        help="Experimental live REPL: type-ahead queue, Esc-cancel, live status line.")
     parser.add_argument("--version", action="version", version=f"LOCAL-Intelligence {__version__}")
     args = parser.parse_args(argv)
 
@@ -503,10 +505,12 @@ def main(argv: Optional[List[str]] = None) -> int:
     if args.image:
         console.print("[yellow]--image is only used with a one-shot prompt. Ignoring.[/yellow]")
 
-    # Interactive live REPL when we own a real terminal and there's no approval
-    # gate (approval prompts need synchronous stdin, which the live loop can't
-    # share). Otherwise the plain reader.
-    if is_tty and approver is None:
+    # Default: the simple, reliable line-by-line reader (renders answers cleanly).
+    # The experimental live REPL (type-ahead queue / Esc-cancel / live status line)
+    # is opt-in via --live or live_repl in config, and needs a real terminal and
+    # no approval gate.
+    want_live = args.live or cfg.get("live_repl", False)
+    if want_live and is_tty and approver is None:
         return _repl_interactive(cfg, messages, console, renderer, session_path, approver=approver)
     return _repl_plain(cfg, messages, console, renderer, session_path, approver=approver)
 

@@ -47,6 +47,9 @@ DEFAULTS: Dict[str, Any] = {
     "status_line": True,
     "status_segments": ["folder", "gpu", "vram", "cpu", "model"],
     "status_refresh": 0.5,
+    # Experimental live REPL (type-ahead queue + Esc-cancel + live status line).
+    # Off by default: the simple line-by-line reader is the reliable default.
+    "live_repl": False,
 }
 
 _ENV_MAP = {
