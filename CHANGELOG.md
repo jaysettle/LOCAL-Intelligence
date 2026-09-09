@@ -1,5 +1,29 @@
 # Changelog
 
+## 0.3.0 — Document reading
+
+**New tool: `read_document`**
+- Extracts text from the formats `read_file` cannot decode: PDF, Word (`.docx`), Excel
+  (`.xlsx`/`.xls`), PowerPoint (`.pptx`), OpenDocument (`.odt`/`.ods`/`.odp`), RTF, EPUB,
+  email (`.eml`), Jupyter notebooks, CSV/TSV and HTML.
+- **Content beats the extension** — format is decided by magic bytes, and for ZIP containers by
+  the marker entry inside, so a `.docx` renamed to `.doc` still reads correctly (with a note).
+- **Structured, capped output** — labelled pages / sheets / slides / parts with `offset`+`limit`
+  paging and a `max_chars` cap, so a long PDF cannot blow a 32K context.
+- Scanned PDFs report that they have no text layer instead of returning silence; encrypted PDFs
+  say so; legacy `.doc`/`.ppt` convert via LibreOffice when installed, otherwise explain the fix.
+- `read_file` now redirects binary document formats to `read_document` rather than returning
+  mojibake, and the system prompt tells the model which tool to reach for.
+
+**Dependencies** — `pypdf`, `python-docx`, `openpyxl`, `python-pptx`, `striprtf`, `xlrd`. All
+MIT/BSD, pure Python or prebuilt wheels. Deliberately *not* `markitdown`, whose base install pulls
+`onnxruntime`+`numpy`+`protobuf` (~300 MB) for file-type sniffing and still ships no parsers; and
+deliberately not `extract-msg` for `.msg`, which pulls 20+ packages including GPLv3/LGPLv3.
+
+**Docs** — README is now installation-only; everything else moved to `docs/USAGE.md`.
+
+**Tests** — 27 new cases (60 total), each building a real file of the format under test.
+
 ## 0.2.0 — Agent upgrades: tooling, memory, safety
 
 **Tooling**

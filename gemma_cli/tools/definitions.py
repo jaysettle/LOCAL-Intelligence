@@ -28,6 +28,26 @@ TOOLS = [
         },
     },
     {
+        "name": "read_document",
+        "description": (
+            "Read the text of a DOCUMENT file that read_file cannot handle: PDF, Word (.docx/.doc), "
+            "Excel (.xlsx/.xls), PowerPoint (.pptx), OpenDocument (.odt/.ods/.odp), RTF, EPUB, "
+            "email (.eml), Jupyter notebooks (.ipynb), CSV/TSV and HTML. Returns plain text split "
+            "into labelled pages / sheets / slides. Use read_file for plain text, code and markdown; "
+            "use this for anything binary or Office-shaped."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "path": {"type": "string", "description": "Path to the document (absolute or ~-relative)"},
+                "offset": {"type": "integer", "description": "1-based page/sheet/slide to start at. Optional, default 1.", "default": 1},
+                "limit": {"type": "integer", "description": "How many pages/sheets/slides to read. Optional, 0 = as many as fit.", "default": 0},
+                "max_chars": {"type": "integer", "description": "Cap on characters returned. Optional, default 20000.", "default": 20000},
+            },
+            "required": ["path"],
+        },
+    },
+    {
         "name": "write_file",
         "description": "Write a WHOLE file, creating it (and parent folders) if needed, overwriting if it exists. Use this for NEW files or full rewrites. To change PART of an existing file, use edit_file instead — it is safer and cheaper. Restricted to allowed write roots.",
         "input_schema": {
