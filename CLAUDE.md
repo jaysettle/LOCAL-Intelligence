@@ -11,7 +11,7 @@ Guidance for Claude (and humans) working on this repo. Read this before making c
 The installed command is **`gemma`**. Primary entry: `gemma go` (interactive chat, anchored in the current folder).
 
 - **Language:** Python 3.10+. **Deps:** `requests`, `rich`, `pyyaml`, `send2trash`, `pillow`, `prompt_toolkit`, `psutil`, plus the document backends `pypdf`, `python-docx`, `openpyxl`, `python-pptx`, `striprtf`, `xlrd` (all MIT/BSD, pure/prebuilt, small — keep it that way).
-- **Model:** `gemma4:12b` by default; `gemma4:e4b` for a smaller/faster fallback.
+- **Model:** `gemma4:12b` by default (7.0 GB download); `gemma4:e4b` is the edge fallback. Note `e4b` is the LARGER download (9.0 GB, measured from the registry manifest) despite the "small model" framing — its advantage is fitting an 8 GB GPU fully, not being smaller on disk.
 - **Backend:** Ollama's HTTP API (`/api/chat`, native function-calling). Never talk to Ollama any other way.
 
 ---
@@ -88,6 +88,8 @@ The installed command is **`gemma`**. Primary entry: `gemma go` (interactive cha
 - **`ollama` isn't on PATH in terminals opened before Ollama was installed.** The installer must detect Ollama at its known install path (`%LOCALAPPDATA%\Programs\Ollama\ollama.exe`), not just via PATH — otherwise it needlessly re-downloads Ollama and the user has to open a fresh terminal.
 
 ### Ollama / model
+- **`install.ps1` hangs after installing Ollama when its output is redirected.** Observed on a clean machine (no prior Ollama, no Python) running `powershell -File install.ps1 -SkipSearch` with stdout piped to a file: Ollama installed fine (0.33.3, API answering), then the script blocked — 0% CPU, no child processes, never reaching the model pull. Cause unconfirmed; the leading suspect is `Start-Process $OllamaExe -ArgumentList "serve" -WindowStyle Hidden` inheriting the script's stdout handle and never releasing it. It may not reproduce interactively, which would explain why it was never noticed. **Repro: run the installer with output piped to a file.** Until it is fixed, a clean install can be finished by hand: `ollama pull gemma4:12b` then `pip install <repo>`.
+- **The 35% CPU spill is measured, not estimated.** On an RTX 2070 (8 GB) with `num_ctx: 32768`, `ollama ps` reports exactly `35%/65% CPU/GPU` for `gemma4:12b` — 5.89 GB in VRAM, 3.11 GB on CPU, 7714/8192 MiB used. A trivial one-line prompt takes ~2 minutes cold. This matches the estimate below.
 - **winget's Ollama package lags** (was 0.31.2 when gemma4 needed ≥ 0.32). The installer downloads `OllamaSetup.exe` from ollama.com directly. `gemma4` requires Ollama ≥ 0.32.
 - **8 GB VRAM cannot fully fit `gemma4:12b`.** Weights alone are ~7.6 GB; with any KV cache the footprint exceeds ~6.5 GB usable VRAM, so ~35% of layers spill to CPU (the slowness). Mitigations, in order: lower `num_ctx` (32K→16K), set `OLLAMA_FLASH_ATTENTION=1` + `OLLAMA_KV_CACHE_TYPE=q8_0`, close GPU-hungry apps, or switch to `gemma4:e4b` (fits fully). None make 12B 100% GPU on 8 GB — that's a hardware ceiling. Verify with `ollama ps` mid-generation (the `PROCESSOR` column) or `GET /api/ps` (`size_vram` vs `size`).
 - **Small models are limited by design.** `gemma4:e4b` (~4-8B) is good only for mechanical/agent tasks (tool-calling, RAG, instruction-following), not reasoning/synthesis. 12B is the floor for logic. Don't benchmark it against frontier cloud models.

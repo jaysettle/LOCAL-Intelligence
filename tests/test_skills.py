@@ -364,3 +364,92 @@ def test_unknown_slash_command_is_not_a_skill(project):
     )
     assert action == "handled"
     assert text is None
+
+
+# --- capture failure handling (found by live testing) ---------------------
+
+def test_chat_once_streams_so_the_timeout_means_gap_between_chunks(monkeypatch):
+    """With stream:false Ollama sends nothing until generation ends, so the read
+    timeout has to cover the whole generation. That lost a real capture."""
+    import json as _json
+    from gemma_cli import agent
+
+    sent = {}
+
+    class FakeResp:
+        def raise_for_status(self): pass
+        def iter_lines(self):
+            for piece in ("Hello ", "world"):
+                yield _json.dumps({"message": {"content": piece}}).encode()
+            yield _json.dumps({"done": True}).encode()
+
+    def fake_post(url, json=None, stream=False, timeout=None):
+        sent.update(payload=json, stream=stream)
+        return FakeResp()
+
+    monkeypatch.setattr(agent.requests, "post", fake_post)
+    out = agent._chat_once({"ollama_url": "http://x", "model": "m"}, [], "m")
+    assert out == "Hello world"
+    assert sent["payload"]["stream"] is True   # never revert this to False
+    assert sent["stream"] is True
+
+
+def test_chat_once_reports_progress():
+    import json as _json
+    from gemma_cli import agent
+
+    class FakeResp:
+        def raise_for_status(self): pass
+        def iter_lines(self):
+            yield _json.dumps({"message": {"content": "abc"}}).encode()
+            yield _json.dumps({"done": True}).encode()
+
+    seen = []
+    import types
+    fake_requests = types.SimpleNamespace(post=lambda *a, **k: FakeResp())
+    original = agent.requests
+    agent.requests = fake_requests
+    try:
+        agent._chat_once({"ollama_url": "http://x", "model": "m"}, [], "m", on_token=seen.append)
+    finally:
+        agent.requests = original
+    assert seen == ["abc"]
+
+
+def test_capture_saves_a_draft_when_the_model_call_fails(project, monkeypatch):
+    """A failed capture must not throw away the conversation."""
+    from rich.console import Console
+    from gemma_cli import main as main_mod
+
+    from gemma_cli import agent as agent_mod
+    monkeypatch.setattr(agent_mod, "_chat_once",
+                        lambda *a, **k: (_ for _ in ()).throw(RuntimeError("read timed out")))
+
+    messages = [{"role": "system", "content": "sys"}]
+    messages += [{"role": "user", "content": "do the thing " * 30},
+                 {"role": "assistant", "content": "did the thing " * 30}]
+
+    action, _, _ = main_mod._capture_skill("rescued", {"model": "m"}, messages, Console(no_color=True))
+    assert action == "handled"
+
+    saved = skills.discover()["rescued"]
+    assert "DRAFT" in saved.body
+    assert "do the thing" in saved.body      # the transcript survived
+
+
+def test_capture_writes_the_skill_on_success(project, monkeypatch):
+    from rich.console import Console
+    from gemma_cli import main as main_mod
+
+    from gemma_cli import agent as agent_mod
+    monkeypatch.setattr(
+        agent_mod, "_chat_once",
+        lambda *a, **k: "DESCRIPTION: Do a thing\nWHEN: asked to thing\nBODY:\n1. Thing it",
+    )
+    messages = [{"role": "system", "content": "sys"},
+                {"role": "user", "content": "x " * 200}]
+
+    main_mod._capture_skill("worked", {"model": "m"}, messages, Console(no_color=True))
+    saved = skills.discover()["worked"]
+    assert saved.description == "Do a thing"
+    assert saved.body == "1. Thing it"

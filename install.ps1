@@ -74,9 +74,19 @@ if (-not $SkipUpdate) {
         Info "Updating code from git ($branch)"
         $scriptFile = Join-Path $RepoDir "install.ps1"
         $before = (Get-FileHash $scriptFile -ErrorAction SilentlyContinue).Hash
-        try {
-            git -C $RepoDir pull --ff-only 2>&1 | ForEach-Object { Write-Host "   $_" -ForegroundColor DarkGray }
-        } catch { Warn "git pull failed (continuing with local code)" }
+        # git writes ordinary progress to stderr, and PowerShell 5.1 turns a native
+        # command's stderr into an ErrorRecord that throws under $ErrorActionPreference
+        # = "Stop". That is what made a perfectly good pull report "git pull failed".
+        # Judge it by the exit code instead.
+        $prevEap = $ErrorActionPreference
+        $ErrorActionPreference = "Continue"
+        $pullOut = (& git -C $RepoDir pull --ff-only 2>&1 | Out-String)
+        $pullCode = $LASTEXITCODE
+        $ErrorActionPreference = $prevEap
+        foreach ($line in ($pullOut -split "`r?`n")) {
+            if ($line.Trim()) { Write-Host "   $line" -ForegroundColor DarkGray }
+        }
+        if ($pullCode -ne 0) { Warn "git pull failed (continuing with local code)" }
         $after = (Get-FileHash $scriptFile -ErrorAction SilentlyContinue).Hash
         if ($before -and $after -and ($before -ne $after)) {
             Info "Installer itself changed - re-running the updated version"

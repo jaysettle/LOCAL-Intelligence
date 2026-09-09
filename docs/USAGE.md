@@ -22,7 +22,7 @@ gemma                                      # same as `gemma go`
 gemma "what changed in this repo today?"   # one-shot, prints and exits
 gemma -p "summarize todo.md"               # one-shot (explicit flag form)
 gemma -i photo.jpg -p "what is this?"      # attach an image (vision)
-gemma --model gemma4:e4b                   # smaller/faster edge model
+gemma --model gemma4:e4b                   # edge model; fits an 8 GB GPU fully
 gemma --no-thinking                        # hide the model's reasoning
 gemma --verbose                            # show full tool output
 gemma go --resume                          # pick up the last session

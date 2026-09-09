@@ -72,7 +72,7 @@ gemma update --full     # also re-check Ollama, the model and web search
 
 | PowerShell | bash | Does |
 |---|---|---|
-| `-Model gemma4:e4b` | `--model gemma4:e4b` | Smaller, faster model |
+| `-Model gemma4:e4b` | `--model gemma4:e4b` | Edge model — fits an 8 GB GPU fully (bigger download, 9 GB) |
 | `-SkipModel` | `--skip-model` | Don't download the model |
 | `-SkipSearch` | `--skip-search` | Don't set up web search |
 | `-SkipUpdate` | `--skip-update` | Don't `git pull` first |

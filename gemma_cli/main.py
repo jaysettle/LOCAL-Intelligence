@@ -205,17 +205,48 @@ def _capture_skill(name, cfg, messages, console):
         console.print("[yellow]Not enough conversation yet to turn into a skill. Do the task first, then run this.[/yellow]")
         return ("handled", None, None)
 
-    console.print(f"[dim]writing the skill from this conversation…[/dim]")
+    console.print("[dim]writing the skill from this conversation (this can take a minute)…[/dim]")
     prompt = skills_mod._CAPTURE_PROMPT.format(transcript=transcript)
-    try:
-        raw = _chat_once(cfg, [{"role": "user", "content": prompt}], cfg.get("fast_model") or cfg["model"])
-    except Exception as e:
-        console.print(f"[red]could not reach the model to write the skill: {e}[/red]")
-        return ("handled", None, None)
 
-    parsed = skills_mod.parse_capture(raw)
+    # Show progress: on a CPU-spilled local model this runs for minutes, and a
+    # silent terminal is indistinguishable from a hang.
+    state = {"chars": 0, "dots": 0}
+
+    def tick(piece: str) -> None:
+        state["chars"] += len(piece)
+        while state["chars"] // 80 > state["dots"]:
+            state["dots"] += 1
+            print(".", end="", flush=True)
+
+    raw = ""
+    error = None
+    try:
+        raw = _chat_once(cfg, [{"role": "user", "content": prompt}],
+                         cfg.get("fast_model") or cfg["model"], on_token=tick)
+    except Exception as e:
+        error = e
+    if state["dots"]:
+        print(flush=True)
+
+    parsed = skills_mod.parse_capture(raw) if raw.strip() else {"description": "", "when": "", "body": ""}
+
     if not parsed["body"].strip():
-        console.print("[red]the model returned nothing usable; try again after a bit more work[/red]")
+        # Never discard the user's work just because the model call failed —
+        # save the transcript as a draft they can edit into a real skill.
+        reason = f"the model call failed ({error})" if error else "the model returned nothing usable"
+        console.print(f"[yellow]{reason}.[/yellow]")
+        draft = (
+            "DRAFT - the model could not write this up, so here is the raw transcript.\n"
+            "Edit it into numbered steps and delete this notice.\n\n"
+            "```\n" + transcript[-6000:] + "\n```\n"
+        )
+        try:
+            path = skills_mod.save(name, f"DRAFT captured from a session", draft)
+        except (ValueError, OSError) as e:
+            console.print(f"[red]could not save a draft either: {e}[/red]")
+            return ("handled", None, None)
+        console.print(f"[green]saved a draft[/green] [dim]{path}[/dim] [dim]- your work is not lost.[/dim]")
+        console.print(f"[dim]{skills_mod.open_in_editor(path)}[/dim]")
         return ("handled", None, None)
 
     try:

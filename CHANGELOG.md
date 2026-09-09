@@ -1,5 +1,30 @@
 # Changelog
 
+## 0.5.1 — Fixes found by running against a real model
+
+First run against live `gemma4:12b` on an 8 GB GPU (measured 35%/65% CPU/GPU spill). It found
+things no unit test could:
+
+- **`/skill new` could time out and throw the capture away.** `_chat_once` posted `"stream": false`,
+  so Ollama sends nothing until generation completes and the read timeout has to cover the entire
+  generation — fine on fast hardware, a coin flip when the model spills to CPU. It observably lost a
+  real capture after 600s. `_chat_once` now streams, so the timeout means the gap between chunks,
+  which is what it always should have meant. `_maybe_compact` uses the same call and had the same
+  latent failure, silently.
+- **A failed capture now saves the transcript as an editable draft** instead of discarding the work
+  the user just asked to keep.
+- **`/skill new` shows progress** while generating — on CPU-spilled hardware it runs for minutes,
+  and a silent terminal is indistinguishable from a hang.
+- **`gemma4:e4b` is the LARGER download** (8.95 GB vs 7.04 GB for `12b`), measured from the registry
+  manifest. README, CLAUDE.md and USAGE.md all called it the "smaller/faster" model, which steered
+  people toward the bigger download. Reworded to what is actually true: it fits an 8 GB GPU fully.
+- **`install.ps1` judges `git pull` by its exit code**, not by whether the pipeline threw — git
+  writes progress to stderr and PowerShell 5.1 turns that into a terminating error.
+- CLAUDE.md records two findings: the measured 35%/65% split on an RTX 2070, and an unresolved
+  installer hang after the Ollama step when output is redirected (with a repro).
+
+**Tests** — 4 new cases (147 total), including one asserting `stream` is never flipped back to false.
+
 ## 0.5.0 — `gemma update`
 
 Update from any folder, in any terminal, without finding the repo first:

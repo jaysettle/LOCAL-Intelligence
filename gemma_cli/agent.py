@@ -63,19 +63,47 @@ def _parse_args(raw) -> Dict:
     return {}
 
 
-def _chat_once(cfg: Dict[str, Any], messages: List[Dict], model: str) -> str:
-    """A single non-streaming completion (used for compaction summaries)."""
+def _chat_once(cfg: Dict[str, Any], messages: List[Dict], model: str, on_token=None) -> str:
+    """A single completion, returned whole (compaction summaries, skill capture).
+
+    This streams even though the caller wants one string. With `stream: false`
+    Ollama sends nothing at all until generation finishes, so requests' read
+    timeout has to cover the entire generation — and on hardware where the model
+    spills to CPU that blows past any sane timeout and the whole result is lost.
+    Streaming makes the timeout mean what it should: the gap between chunks.
+
+    `on_token` receives text as it arrives, so a caller can show progress.
+    """
     url = f"{cfg['ollama_url'].rstrip('/')}/api/chat"
     payload = {
         "model": model,
         "messages": messages,
-        "stream": False,
+        "stream": True,
         "keep_alive": cfg.get("keep_alive", "30m"),
         "options": {"num_ctx": int(cfg.get("num_ctx", 32768))},
     }
-    resp = requests.post(url, json=payload, timeout=int(cfg.get("timeout", 600)))
+    resp = requests.post(url, json=payload, stream=True, timeout=int(cfg.get("timeout", 600)))
     resp.raise_for_status()
-    return (resp.json().get("message") or {}).get("content", "")
+
+    parts: List[str] = []
+    for line in resp.iter_lines():
+        if not line:
+            continue
+        try:
+            chunk = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        piece = (chunk.get("message") or {}).get("content")
+        if piece:
+            parts.append(piece)
+            if on_token is not None:
+                try:
+                    on_token(piece)
+                except Exception:
+                    pass
+        if chunk.get("done"):
+            break
+    return "".join(parts)
 
 
 def _maybe_compact(cfg: Dict[str, Any], messages: List[Dict]) -> Optional[str]:
