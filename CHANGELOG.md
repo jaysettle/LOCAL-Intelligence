@@ -1,5 +1,34 @@
 # Changelog
 
+## 0.5.0 — `gemma update`
+
+Update from any folder, in any terminal, without finding the repo first:
+
+```
+gemma update            # pull the latest source and reinstall
+gemma update --check    # report whether new commits exist; install nothing
+gemma update --full     # run the platform installer too (Ollama, model, SearXNG)
+gemma update --repo <path>
+```
+
+- **Finds the checkout**: `--repo`, then `repo_dir` in config, then the package's own location
+  (editable installs), then the working directory and its parents, then `~/LOCAL-Intelligence`.
+  The first run records the location; the installers now record it at install time too. With no
+  checkout at all it offers to clone one, so ZIP downloads get working updates.
+- **The Windows lock is handled properly.** Windows holds `gemma.exe` open while it runs, and a
+  pip reinstall from inside a running `gemma` is what leaves a corrupt `~ocal_intelligence*.dist-info`
+  behind and jams the *next* install. So the git pull happens inline and the install is handed to a
+  helper that waits for the process to exit first. Whether the lock exists is tested directly — by
+  asking Windows for a write handle on `gemma.exe` — rather than inferred from `sys.argv[0]`, whose
+  shape depends on which console-script launcher pip generated.
+- The deferred helper waits on the parent PID with stdlib `ctypes`, not `psutil`: a compiled
+  extension can fail to import at runtime, and the updater must not be the thing that breaks.
+- Pull success is judged by git's return code, never by whether stderr had output — git writes
+  progress to stderr, which is the old "git pull failed" false alarm.
+- Installer output is written to `<config_dir>/last_update.log`.
+
+**Tests** — 39 new cases (141 total).
+
 ## 0.4.0 — Skills, and memory you can actually find
 
 **Skills** — reusable procedures saved as markdown, run as `/<name>`.

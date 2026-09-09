@@ -178,6 +178,8 @@ if (Have "gemma") {
 # 5. Default config -------------------------------------------------------
 Info "Writing default config (kept if it already exists)"
 & $py -m gemma_cli.main --setup-config
+# Record where the source lives so "gemma update" finds it from any folder.
+& $py -c "from gemma_cli.updater import remember_repo; from pathlib import Path; remember_repo(Path(r'$RepoDir'))"
 
 # 6. Web search (optional) ------------------------------------------------
 if ($SkipSearch) {
@@ -227,5 +229,5 @@ try {
 Write-Host ""
 Ok "Done. Start chatting with:  gemma go"
 Write-Host "     One-shot:  gemma `"list the files in my home folder`"" -ForegroundColor DarkGray
-Write-Host "     Update:    re-run this script anytime to pull the latest and reinstall" -ForegroundColor DarkGray
+Write-Host "     Update:    gemma update   (from any folder; or re-run this script)" -ForegroundColor DarkGray
 Write-Host "     Config:    $env:APPDATA\gemma-cli\config.yaml" -ForegroundColor DarkGray

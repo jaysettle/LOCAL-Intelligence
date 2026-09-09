@@ -30,6 +30,7 @@ The installed command is **`gemma`**. Primary entry: `gemma go` (interactive cha
 | `gemma_cli/sysprompt.py` | Builds the system prompt, templated from the host (user, host, OS, cwd + listing, date/time, memory, skill index) |
 | `gemma_cli/render.py` | `Renderer` — rich-based output for the one-shot / plain paths |
 | `gemma_cli/sessions.py` | Save/restore conversations under `.gemma/sessions/` (per project) |
+| `gemma_cli/updater.py` | `gemma update` — locate the checkout, git pull, reinstall (deferred on Windows) |
 | `gemma_cli/skills.py` | Skill discovery, frontmatter parsing, the system-prompt index, capture-from-transcript, usage reporting |
 | `gemma_cli/statusline.py` | GPU/CPU/VRAM sampling (nvidia-smi + psutil) + toolbar string for the live REPL |
 | `gemma_cli/clipboard.py` | Grab an image off the clipboard (Pillow `ImageGrab`) for `/paste` and Alt+V |
@@ -73,6 +74,7 @@ The installed command is **`gemma`**. Primary entry: `gemma go` (interactive cha
 - **Document reading is a targeted dispatcher, not a mega-library.** `read_document` picks a small backend per format (pypdf / python-docx / openpyxl / python-pptx / striprtf / xlrd) and uses the standard library alone for OpenDocument, EPUB, `.eml`, `.ipynb` and CSV. **Do not swap this for `markitdown`:** its *base* install pulls `magika` → `onnxruntime` + `numpy` + `protobuf` (~300 MB of ML runtime, just for file-type sniffing) and still ships none of the parsers — they are extras. That breaks the "small, offline, prebuilt wheels" constraint. Same reasoning rules out `extract-msg` for `.msg`: 20+ transitive packages including GPLv3/LGPLv3, in an MIT repo.
 - **Skills load progressively — never inline a body in the system prompt.** `skills.index_block()` emits names + one-line descriptions only (~15 tokens each); bodies load when a skill is actually invoked (`/<name>`, or the model calling `load_skill`). This is the whole design: twenty skill bodies inlined would cost a third of a 32K window before the user types anything. If you add a field to the index, check what it costs × 40 skills.
 - **Skill names are a security boundary, not a label.** They become slash commands *and* filenames, so `skills._SAFE_NAME` is anchored and rejects dots and separators — a `name:` in frontmatter can never escape the skills dir. A frontmatter name that fails validation falls back to the filename stem. Keep it that way.
+- **`gemma update` must never reinstall in-place on Windows.** Windows holds `gemma.exe` open while it runs; a pip reinstall launched from inside a running `gemma` is exactly what leaves a corrupt `~ocal_intelligence*.dist-info` behind and jams the *next* install (see the install-failure pitfall below). So the git pull runs inline and the install is handed to a helper that waits on the parent PID first. Two details that matter: the lock is **tested**, not inferred — `_launcher_is_locked()` asks Windows for a write handle on `gemma.exe`, because `sys.argv[0]` varies with whichever console-script launcher pip generated — and the helper waits using stdlib `ctypes`, **not `psutil`**, since a compiled extension can fail to import at runtime and the updater is the one tool that must still work when the environment is broken.
 - **A skill body is executed instructions.** It is the user's own file on their own machine, so the trust model is the same as a shell script — but that is why `load_skill` is gated by `allow_model_skills` and why the docs warn about skills from other people.
 - **Format is decided by content, not extension.** `doc_tools._sniff` reads magic bytes and looks *inside* ZIP containers for the marker entry (`word/document.xml`, `xl/workbook.xml`, `mimetype`), so renamed files still work. Extraction output is labelled by page/sheet/slide and capped by `max_chars` with `offset`/`limit` paging — a 400-page PDF must never be handed whole to a 32K context.
 
@@ -107,7 +109,7 @@ The installed command is **`gemma`**. Primary entry: `gemma go` (interactive cha
 
 ---
 
-## Current state (v0.4.0)
+## Current state (v0.5.0)
 
 **Working and shipped (default `gemma go`, the plain REPL):**
 - Agentic tool loop; tools: `read_file`, `read_document`, `write_file`, `edit_file`, `delete_file`, `shell`, `glob`, `grep`, `list_directory`, `web_search`, `web_fetch`, `remember`, `load_skill`, `set_plan`, `complete_step`.
@@ -116,7 +118,8 @@ The installed command is **`gemma`**. Primary entry: `gemma go` (interactive cha
 - Document reading (`read_document`): PDF, Word, Excel, PowerPoint, OpenDocument, RTF, EPUB, `.eml`, `.ipynb`, CSV/TSV, HTML; content-sniffed format detection, page/sheet/slide paging, LibreOffice fallback for legacy `.doc`/`.ppt`.
 - Skills: markdown procedures in `skills/` (project) and `<config_dir>/skills/` (global), run as `/<name>`, captured from a transcript with `/skill new <name>`, reported by `/skills` and `gemma skills`. Index-only system-prompt injection; `load_skill` tool gated by `allow_model_skills`.
 - Human-writable memory surfaced with `/memory` and `/memory global` (the files themselves predate this).
-- 104 pytest cases (`tests/test_doc_tools.py` builds a real file per format — no mocks; `tests/test_skills.py` redirects the global skills dir into tmp so a run never touches the real config dir).
+- `gemma update` from any folder: finds the checkout, pulls, reinstalls; `--check`, `--full`, `--repo`.
+- 141 pytest cases (`tests/test_doc_tools.py` builds a real file per format — no mocks; `tests/test_skills.py` redirects the global skills dir into tmp so a run never touches the real config dir).
 
 **Experimental (opt-in via `--live`):**
 - Live REPL: type-ahead queue, Esc-to-cancel, live GPU/CPU/VRAM status line. Functional but can render awkwardly on some Windows consoles. Needs real-terminal validation before promotion.
@@ -130,7 +133,7 @@ The installed command is **`gemma`**. Primary entry: `gemma go` (interactive cha
 ```bash
 # from a clone
 pip install -e .            # or: pip install .
-pytest -q                   # run the test suite (104 cases)
+pytest -q                   # run the test suite (141 cases)
 gemma --version             # verify the installed entry point
 gemma "what is 2+2"         # one-shot smoke test (needs Ollama running)
 ```

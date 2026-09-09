@@ -29,6 +29,28 @@ gemma go --resume                          # pick up the last session
 gemma go --approve writes                  # y/N prompt before any change
 ```
 
+### Updating
+
+```
+gemma update            # pull the latest source and reinstall
+gemma update --check    # report whether new commits exist; install nothing
+gemma update --full     # run the full installer too (Ollama, model, SearXNG)
+gemma update --repo C:\path\to\LOCAL-Intelligence   # if it can't find your checkout
+```
+
+It finds your source checkout in this order: `--repo`, the path remembered in `config.yaml`, the
+package's own location (editable installs), the current folder and its parents, then
+`~/LOCAL-Intelligence`. The first successful run records the location so later ones are instant.
+If there's no checkout at all — a ZIP download, say — it offers to clone one.
+
+**On Windows the install happens in a second window.** Windows holds `gemma.exe` open while it
+runs, so the update pulls the source, then hands the install to a helper that waits for `gemma` to
+exit first. Doing it in-place is what leaves a corrupt `~ocal_intelligence*.dist-info` behind and
+jams the *next* install. The output is also written to `%APPDATA%\gemma-cli\last_update.log`.
+
+If an update ever does fail with `WinError 32`, a `gemma` session is still running somewhere —
+close every one and re-run.
+
 ### REPL commands
 
 `/paste` · `/image <path> <prompt>` · `/clear` · `/model <tag>` · `/save` · `/resume [name]` ·

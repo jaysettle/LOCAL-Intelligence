@@ -53,11 +53,17 @@ That's it. It works in whatever folder you launch it from.
 
 ## Update
 
-Same command as install. Skips the big downloads.
+From any folder, any terminal:
 
-```powershell
-cd LOCAL-Intelligence
-powershell -ExecutionPolicy Bypass -File .\install.ps1
+```
+gemma update
+```
+
+That's the whole thing. It pulls the latest and reinstalls.
+
+```
+gemma update --check    # is there an update? install nothing
+gemma update --full     # also re-check Ollama, the model and web search
 ```
 
 ---
