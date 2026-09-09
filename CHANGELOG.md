@@ -1,5 +1,29 @@
 # Changelog
 
+## 0.4.0 — Skills, and memory you can actually find
+
+**Skills** — reusable procedures saved as markdown, run as `/<name>`.
+- `<project>/skills/<name>.md` and a global `<config_dir>/skills/<name>.md`; project wins on a
+  name collision. YAML frontmatter (`name`, `description`, `when`) plus a body of steps.
+- **Progressive disclosure**: only the index (names + one-line descriptions) goes into the system
+  prompt — ~15 tokens per skill. Bodies load on invocation. Inlining twenty skill bodies would
+  spend a third of a 32K context before the user typed anything.
+- `/skill new <name>` writes a skill from the conversation that just happened: the model is asked
+  to generalise the procedure, keep the commands that stay the same, and record what went wrong.
+- `load_skill` tool lets the model pull in a skill itself when the request matches its `when`.
+  Disable with `allow_model_skills: false` if a small model over-triggers; `/<name>` still works.
+- Reporting: `/skills` in the REPL and `gemma skills [folder]` from the shell — description, scope,
+  use count, last used, and whether each use came from the command or the model. Counts live in
+  `.gemma/skill_usage.json` (project-local, gitignored).
+- Skill names are validated against an anchored pattern, so a name from frontmatter can never
+  escape the skills directory.
+
+**Memory** — the human-writable memory files were always there; now they're findable.
+- `/memory` opens the project `GEMMA.md`, `/memory global` the global one, in `$EDITOR` (or the
+  system default on Windows). Both were already auto-loaded into the system prompt every run.
+
+**Tests** — 44 new cases (104 total).
+
 ## 0.3.0 — Document reading
 
 **New tool: `read_document`**

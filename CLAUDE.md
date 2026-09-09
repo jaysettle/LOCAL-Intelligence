@@ -27,12 +27,13 @@ The installed command is **`gemma`**. Primary entry: `gemma go` (interactive cha
 | `gemma_cli/main.py` | CLI arg parsing, the two REPLs (`_repl_plain`, `_repl_interactive`), shared `_handle_command`, one-shot path |
 | `gemma_cli/agent.py` | `run_turn()` — the streaming tool loop; also the reliability harness (compaction, malformed-tool-call rescue, loop detection, empty-turn nudge) and cooperative `cancel` |
 | `gemma_cli/config.py` | Layered config: defaults → `config.yaml` → env (`GEMMA_*`) → CLI flags; pushes runtime settings into tool modules via `apply_to_tools()` |
-| `gemma_cli/sysprompt.py` | Builds the system prompt, templated from the host (user, host, OS, cwd + listing, date/time, memory) |
+| `gemma_cli/sysprompt.py` | Builds the system prompt, templated from the host (user, host, OS, cwd + listing, date/time, memory, skill index) |
 | `gemma_cli/render.py` | `Renderer` — rich-based output for the one-shot / plain paths |
 | `gemma_cli/sessions.py` | Save/restore conversations under `.gemma/sessions/` (per project) |
+| `gemma_cli/skills.py` | Skill discovery, frontmatter parsing, the system-prompt index, capture-from-transcript, usage reporting |
 | `gemma_cli/statusline.py` | GPU/CPU/VRAM sampling (nvidia-smi + psutil) + toolbar string for the live REPL |
 | `gemma_cli/clipboard.py` | Grab an image off the clipboard (Pillow `ImageGrab`) for `/paste` and Alt+V |
-| `gemma_cli/tools/` | `definitions.py` (schemas), `executor.py` (dispatch), `file_tools.py`, `doc_tools.py`, `shell_tools.py`, `web_tools.py`, `memory_tools.py`, `plan_tools.py` |
+| `gemma_cli/tools/` | `definitions.py` (schemas), `executor.py` (dispatch), `file_tools.py`, `doc_tools.py`, `shell_tools.py`, `web_tools.py`, `memory_tools.py`, `plan_tools.py`, `skill_tools.py` |
 | `install.ps1` / `install.sh` | Idempotent, self-updating installers (Windows / POSIX) |
 | `README.md` / `docs/USAGE.md` | README is **installation only** — keep it that way; usage docs go in `docs/USAGE.md` |
 
@@ -43,8 +44,8 @@ The installed command is **`gemma`**. Primary entry: `gemma go` (interactive cha
   in place. That is what lets one loop drive the rich renderer, the plain worker-thread renderer,
   and tests. Never print from `agent.py`.
 - **Config is *pushed* into tools, not pulled.** `config.apply_to_tools()` writes module-level
-  globals in `file_tools` (write roots), `web_tools` (SearXNG URL) and `memory_tools` (memory
-  paths). Tools never import config. Tests must call the setters (`set_allowed_write_roots`,
+  globals in `file_tools` (write roots), `web_tools` (SearXNG URL), `memory_tools` (memory
+  paths) and `skill_tools` (`allow_model_skills`). Tools never import config. Tests must call the setters (`set_allowed_write_roots`,
   `configure`) to isolate themselves.
 - **Every tool takes one dict and returns a `str`.** Errors are returned as readable strings for
   the model, never raised — `execute_tool` catches anything that escapes.
@@ -70,6 +71,9 @@ The installed command is **`gemma`**. Primary entry: `gemma go` (interactive cha
 - **Small-model reality shapes everything.** `edit_file` uses exact-string replacement (a 12B rewriting a whole file drops content). The reliability harness (compaction, tool-call rescue, loop detection) exists because small models fumble; patterns adapted from the MIT-licensed `lutelute/local-cli`.
 - **Config is the seam for remote GPUs.** `ollama_url` can point at another machine's Ollama, so a weak-GPU laptop can borrow a stronger networked GPU without new hardware.
 - **Document reading is a targeted dispatcher, not a mega-library.** `read_document` picks a small backend per format (pypdf / python-docx / openpyxl / python-pptx / striprtf / xlrd) and uses the standard library alone for OpenDocument, EPUB, `.eml`, `.ipynb` and CSV. **Do not swap this for `markitdown`:** its *base* install pulls `magika` → `onnxruntime` + `numpy` + `protobuf` (~300 MB of ML runtime, just for file-type sniffing) and still ships none of the parsers — they are extras. That breaks the "small, offline, prebuilt wheels" constraint. Same reasoning rules out `extract-msg` for `.msg`: 20+ transitive packages including GPLv3/LGPLv3, in an MIT repo.
+- **Skills load progressively — never inline a body in the system prompt.** `skills.index_block()` emits names + one-line descriptions only (~15 tokens each); bodies load when a skill is actually invoked (`/<name>`, or the model calling `load_skill`). This is the whole design: twenty skill bodies inlined would cost a third of a 32K window before the user types anything. If you add a field to the index, check what it costs × 40 skills.
+- **Skill names are a security boundary, not a label.** They become slash commands *and* filenames, so `skills._SAFE_NAME` is anchored and rejects dots and separators — a `name:` in frontmatter can never escape the skills dir. A frontmatter name that fails validation falls back to the filename stem. Keep it that way.
+- **A skill body is executed instructions.** It is the user's own file on their own machine, so the trust model is the same as a shell script — but that is why `load_skill` is gated by `allow_model_skills` and why the docs warn about skills from other people.
 - **Format is decided by content, not extension.** `doc_tools._sniff` reads magic bytes and looks *inside* ZIP containers for the marker entry (`word/document.xml`, `xl/workbook.xml`, `mimetype`), so renamed files still work. Extraction output is labelled by page/sheet/slide and capped by `max_chars` with `offset`/`limit` paging — a 400-page PDF must never be handed whole to a 32K context.
 
 ---
@@ -103,14 +107,16 @@ The installed command is **`gemma`**. Primary entry: `gemma go` (interactive cha
 
 ---
 
-## Current state (v0.3.0)
+## Current state (v0.4.0)
 
 **Working and shipped (default `gemma go`, the plain REPL):**
-- Agentic tool loop; tools: `read_file`, `read_document`, `write_file`, `edit_file`, `delete_file`, `shell`, `glob`, `grep`, `list_directory`, `web_search`, `web_fetch`, `remember`, `set_plan`, `complete_step`.
+- Agentic tool loop; tools: `read_file`, `read_document`, `write_file`, `edit_file`, `delete_file`, `shell`, `glob`, `grep`, `list_directory`, `web_search`, `web_fetch`, `remember`, `load_skill`, `set_plan`, `complete_step`.
 - Project + global memory (`GEMMA.md` auto-load + `remember`), session save/`--resume`, backup-on-write, trash-not-delete, approval mode (`--approve`), context compaction, current-date grounding, vision (image input), local SearXNG web search.
 - `/paste` (clipboard image) works in both REPLs. Installers self-update (`git pull` + reinstall, skipping big downloads).
 - Document reading (`read_document`): PDF, Word, Excel, PowerPoint, OpenDocument, RTF, EPUB, `.eml`, `.ipynb`, CSV/TSV, HTML; content-sniffed format detection, page/sheet/slide paging, LibreOffice fallback for legacy `.doc`/`.ppt`.
-- 60 pytest cases (`tests/test_doc_tools.py` builds a real file per format — no mocks).
+- Skills: markdown procedures in `skills/` (project) and `<config_dir>/skills/` (global), run as `/<name>`, captured from a transcript with `/skill new <name>`, reported by `/skills` and `gemma skills`. Index-only system-prompt injection; `load_skill` tool gated by `allow_model_skills`.
+- Human-writable memory surfaced with `/memory` and `/memory global` (the files themselves predate this).
+- 104 pytest cases (`tests/test_doc_tools.py` builds a real file per format — no mocks; `tests/test_skills.py` redirects the global skills dir into tmp so a run never touches the real config dir).
 
 **Experimental (opt-in via `--live`):**
 - Live REPL: type-ahead queue, Esc-to-cancel, live GPU/CPU/VRAM status line. Functional but can render awkwardly on some Windows consoles. Needs real-terminal validation before promotion.
@@ -124,7 +130,7 @@ The installed command is **`gemma`**. Primary entry: `gemma go` (interactive cha
 ```bash
 # from a clone
 pip install -e .            # or: pip install .
-pytest -q                   # run the test suite (60 cases)
+pytest -q                   # run the test suite (104 cases)
 gemma --version             # verify the installed entry point
 gemma "what is 2+2"         # one-shot smoke test (needs Ollama running)
 ```

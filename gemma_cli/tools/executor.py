@@ -11,6 +11,7 @@ from .shell_tools import shell, grep
 from .web_tools import web_search, web_fetch
 from .memory_tools import remember
 from .plan_tools import set_plan, complete_step
+from .skill_tools import load_skill
 
 _DISPATCH = {
     "read_file": read_file,
@@ -27,6 +28,7 @@ _DISPATCH = {
     "remember": remember,
     "set_plan": set_plan,
     "complete_step": complete_step,
+    "load_skill": load_skill,
 }
 
 

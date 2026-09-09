@@ -32,7 +32,7 @@ gemma go --approve writes                  # y/N prompt before any change
 ### REPL commands
 
 `/paste` · `/image <path> <prompt>` · `/clear` · `/model <tag>` · `/save` · `/resume [name]` ·
-`/sessions` · `/help` · `/exit`
+`/sessions` · `/memory [global]` · `/skills` · `/skill new <name>` · `/<skill-name>` · `/help` · `/exit`
 
 ### Live REPL (opt-in)
 
@@ -60,6 +60,7 @@ line-by-line reader is the default.
 | `glob` / `grep` / `list_directory` | Find files, search contents, browse folders |
 | `web_search` / `web_fetch` | Search the web via a local SearXNG instance and read pages |
 | `remember` | Persist a durable fact to project or global memory |
+| `load_skill` | Pull in a saved procedure when the request matches it |
 | `set_plan` / `complete_step` | Keep a checklist for multi-step tasks |
 | vision | Attach an image and ask about it (Gemma is multimodal) |
 
@@ -93,11 +94,97 @@ including GPL-licensed ones. Export to `.eml` instead.
 
 ---
 
-## Memory, sessions & safety
+## Memory — teach it things that stick
 
-- **Memory** — a `GEMMA.md` in your project folder is auto-loaded into the agent's context each
-  run (like a project README for the AI); it can add to it with the `remember` tool. A global
-  memory file holds cross-project facts. **Both are plain markdown — edit them yourself.**
+Two plain markdown files. **Both are yours to edit**; the agent also appends to them itself with
+the `remember` tool.
+
+| | File | Holds |
+|---|---|---|
+| **Project** | `GEMMA.md` in the project folder | Conventions, gotchas, who's who — anything specific to this codebase. Commit it. |
+| **Global** | `%APPDATA%\gemma-cli\memory.md` | Facts about you and your machine that apply everywhere. |
+
+```
+/memory            # open the project GEMMA.md in your editor
+/memory global     # open the global one
+```
+
+Both are loaded into the system prompt at every launch, so **edits apply on the next run**, not
+mid-conversation. Keep them short — every line costs context on every single turn. A few dozen
+lines of real conventions beats a hundred lines of history.
+
+---
+
+## Skills — teach it *how you do things*
+
+A skill is a procedure saved as markdown and run with a slash command. The point: you work through
+something fiddly once, save it, and next time it's one command.
+
+```
+/skill new deploy-api     # right after doing it — writes the procedure up from the conversation
+/deploy-api               # next time
+/deploy-api skip the smoke tests    # anything after the name is extra context for this run
+/skills                   # what exists, and how often each gets used
+```
+
+Skills live in markdown files you can edit or hand-write:
+
+```
+<project>/skills/<name>.md          project skills — commit these
+%APPDATA%\gemma-cli\skills\<name>.md   global skills — every project
+```
+
+A project skill shadows a global one with the same name.
+
+```markdown
+---
+name: deploy-api
+description: Deploy the API to staging and verify it
+when: the user asks to deploy or ship the API
+---
+1. Run the test suite with the shell tool. Stop if anything fails.
+2. Push to the staging remote.
+3. Curl the health endpoint and confirm it returns 200.
+```
+
+`description` shows in the index and in `/skills`. `when` tells the model when a request should
+trigger it — **write it as a trigger condition, not a summary**, or a small model will reach for
+the skill constantly.
+
+### How the model sees them
+
+Only the **index** — names and one-line descriptions — goes into the system prompt. Twenty skills
+cost a few hundred tokens; the full bodies would cost a third of the context window before you
+typed anything. A skill body loads only when it actually runs.
+
+The model can also pull a skill in itself via the `load_skill` tool when your request clearly
+matches a `when` line. If your model over-triggers, turn that off — `/<name>` keeps working:
+
+```yaml
+allow_model_skills: false   # in config.yaml
+```
+
+### Capturing a skill
+
+`/skill new <name>` sends the current conversation back to the model and asks it to write up the
+procedure, generalised — replacing this run's specific values with notes about what varies, and
+keeping what went wrong and how you fixed it. It saves the file and opens it.
+
+**Read what it wrote.** The model only saw the transcript; it will occasionally generalise the
+wrong thing. It's plain markdown — fix it. The new skill is available on the next launch.
+
+`/skill edit <name>` and `/skill delete <name>` do what they say (delete goes to the recycle bin).
+
+Usage counts are recorded in `.gemma/skill_usage.json`, project-local and gitignored. `gemma skills`
+prints the same report without starting a session.
+
+**One caution:** a skill body is instructions the agent executes. Treat a skill file from someone
+else the way you'd treat a shell script from someone else.
+
+---
+
+## Sessions & safety
+
 - **Sessions** — conversations autosave per folder; `gemma go --resume` picks up where you left off.
 - **Recoverable by default** — edits back up the prior version to `.gemma/backups/`; deletes go to
   the Recycle Bin.
@@ -126,6 +213,7 @@ searxng_url: http://localhost:8899
 keep_alive: 30m
 max_tool_iterations: 25
 show_thinking: true
+allow_model_skills: true    # let the model load skills itself; /<name> works either way
 allowed_write_roots:        # the agent may only write under these paths
   - C:\Users\you
   - C:\Users\you\AppData\Local\Temp

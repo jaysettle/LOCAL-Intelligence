@@ -33,7 +33,7 @@ Tool discipline:
 - When you learn a durable fact about this project or the user's preferences, call `remember` so you keep it across sessions.
 - For a task with several steps, call `set_plan` with the steps first, then `complete_step` as you finish each — it keeps you on track.
 - When the task is complete, stop calling tools and give a concise summary with full paths.
-{memory_block}
+{memory_block}{skills_block}
 Formatting: reply in markdown — short paragraphs, bullets, headers and code blocks where helpful.
 """
 
@@ -70,6 +70,20 @@ def _memory_block(cfg: Dict[str, Any]) -> str:
     return "\n" + "\n\n".join(parts) + "\n"
 
 
+def _skills_block(cfg: Dict[str, Any]) -> str:
+    """The skill INDEX only — names and descriptions, never bodies.
+
+    Bodies load on demand (/<name> or the load_skill tool). Inlining them here
+    would spend the context window before the user has typed anything.
+    """
+    from .skills import index_block
+    try:
+        block = index_block()
+    except Exception:
+        return ""
+    return "\n" + block if block else ""
+
+
 def build_system_prompt(cfg: Dict[str, Any]) -> str:
     is_windows = platform.system() == "Windows"
     try:
@@ -98,4 +112,5 @@ def build_system_prompt(cfg: Dict[str, Any]) -> str:
         home=str(Path.home()),
         roots=roots,
         memory_block=_memory_block(cfg),
+        skills_block=_skills_block(cfg),
     )

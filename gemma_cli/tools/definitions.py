@@ -177,6 +177,22 @@ TOOLS = [
         },
     },
     {
+        "name": "load_skill",
+        "description": (
+            "Load a saved skill — a procedure written earlier for a recurring task. The skills "
+            "available to you are listed in your system prompt with a 'use when' note. Call this "
+            "ONLY when the user's request clearly matches one of them; for ordinary work just use "
+            "your normal tools. Returns the skill's steps for you to follow."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "name": {"type": "string", "description": "Exact skill name from the list in your system prompt"},
+            },
+            "required": ["name"],
+        },
+    },
+    {
         "name": "set_plan",
         "description": "For a multi-step task, record your plan as a checklist BEFORE starting. Keeps you on track. Call complete_step as you finish each item.",
         "input_schema": {
