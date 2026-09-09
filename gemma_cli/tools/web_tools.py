@@ -92,6 +92,18 @@ class _TextExtractor(HTMLParser):
             self.parts.append(data)
 
 
+def html_to_text(body: str) -> str:
+    """Strip HTML to readable text. Shared with doc_tools (EPUB, .eml, .html)."""
+    extractor = _TextExtractor()
+    try:
+        extractor.feed(body)
+        text = "".join(extractor.parts)
+    except Exception:
+        text = body
+    text = re.sub(r"[ \t]+", " ", text)
+    return re.sub(r"\n\s*\n+", "\n\n", text).strip()
+
+
 def web_fetch(inp: Dict[str, Any]) -> str:
     url = str(inp.get("url", "")).strip()
     if not url:
@@ -117,14 +129,7 @@ def web_fetch(inp: Dict[str, Any]) -> str:
     body = raw.decode("utf-8", errors="replace")
 
     if "html" in content_type or body[:200].lstrip().lower().startswith(("<!doctype", "<html")):
-        extractor = _TextExtractor()
-        try:
-            extractor.feed(body)
-            text = "".join(extractor.parts)
-        except Exception:
-            text = body
-        text = re.sub(r"[ \t]+", " ", text)
-        text = re.sub(r"\n\s*\n+", "\n\n", text).strip()
+        text = html_to_text(body)
     else:
         text = body.strip()
 

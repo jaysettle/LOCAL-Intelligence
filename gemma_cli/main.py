@@ -9,17 +9,20 @@ LOCAL-Intelligence CLI entry point.
   gemma -p "prompt"             one-shot (explicit flag form)
   gemma -i img.png -p "..."     attach an image (vision)
   gemma --model gemma4:e4b      override model for this run
+  gemma skills [folder]         list saved skills and their usage, then exit
   gemma --setup-config          write a default config.yaml and exit
 
 Interactive REPL: input stays live while it answers; type + Enter to queue the
 next prompt; Esc stops the current answer; Alt+V pastes a clipboard image; a
 status line under the input shows the folder + GPU/CPU/VRAM while it works.
-REPL commands: /paste /image /clear /model /save /sessions /resume /help /exit
+REPL commands: /paste /image /clear /model /save /sessions /resume /memory /skills
+/skill new <name> /<skill-name> /help /exit
 """
 
 import argparse
 import os
 import sys
+from pathlib import Path
 from typing import Dict, List, Optional
 
 from rich.console import Console
@@ -129,8 +132,135 @@ _HELP = (
     "/save — save this session now\n"
     "/sessions — list saved sessions in this folder\n"
     "/resume [name] — load the latest (or named) session\n"
+    "/memory [global] — open the memory file you can edit by hand\n"
+    "/skills — list saved skills and how often they're used\n"
+    "/skill new <name> — turn what we just did into a reusable skill\n"
+    "/skill edit|delete <name> — manage a skill\n"
+    "/<skill-name> [extra] — run a saved skill\n"
     "/exit — quit    (while answering: Esc stops it, typing queues the next)[/dim]"
 )
+
+
+def _handle_memory(parts, cfg, console):
+    """`/memory` — open the human-writable memory file in an editor."""
+    from . import skills as skills_mod
+
+    scope = parts[1].lower() if len(parts) >= 2 else "project"
+    if scope == "global":
+        path = Path(cfg.get("global_memory_file") or "")
+    else:
+        path = Path.cwd() / cfg.get("project_memory_file", "GEMMA.md")
+
+    existed = path.exists()
+    console.print(f"[dim]{skills_mod.open_in_editor(path)}[/dim]")
+    if not existed:
+        console.print(
+            "[dim]This file is loaded into the agent's context every run. Write plain "
+            "markdown — conventions, gotchas, who's who. It also appends here itself "
+            "when it learns something durable.[/dim]"
+        )
+    console.print("[dim]Changes apply on the next launch (the system prompt is built at startup).[/dim]")
+    return ("handled", None, None)
+
+
+def _skill_report(console) -> None:
+    from . import skills as skills_mod
+
+    rows = skills_mod.report()
+    if not rows:
+        console.print(
+            f"[dim]No skills yet. Create one from work you just did with "
+            f"[/dim][bold]/skill new <name>[/bold][dim], or write a markdown file in "
+            f"{skills_mod.project_skills_dir()}[/dim]"
+        )
+        return
+
+    console.print(f"[bold]{len(rows)} skill(s)[/bold]")
+    for row in rows:
+        used = f"used {row['count']}×" if row["count"] else "unused"
+        when = f" [dim]· when: {row['when']}[/dim]" if row["when"] else ""
+        console.print(f"  [bold cyan]/{row['name']}[/bold cyan] [dim]({row['scope']}, {used})[/dim]")
+        if row["description"]:
+            console.print(f"      {row['description']}{when}")
+        if row["last_used"]:
+            by = row.get("sources") or {}
+            detail = ", ".join(f"{k}: {v}" for k, v in by.items())
+            console.print(f"      [dim]last used {row['last_used']}" + (f" ({detail})" if detail else "") + "[/dim]")
+    console.print(f"[dim]Project skills live in {skills_mod.project_skills_dir()}[/dim]")
+
+
+def _capture_skill(name, cfg, messages, console):
+    """`/skill new <name>` — write the work we just did up as a reusable skill."""
+    from . import skills as skills_mod
+    from .agent import _chat_once
+
+    if not skills_mod.is_valid_name(name):
+        console.print(f"[red]'{name}' is not a usable skill name[/red] [dim](letters, digits, - and _)[/dim]")
+        return ("handled", None, None)
+
+    transcript = skills_mod.transcript_for_capture(messages)
+    if len(transcript) < 200:
+        console.print("[yellow]Not enough conversation yet to turn into a skill. Do the task first, then run this.[/yellow]")
+        return ("handled", None, None)
+
+    console.print(f"[dim]writing the skill from this conversation…[/dim]")
+    prompt = skills_mod._CAPTURE_PROMPT.format(transcript=transcript)
+    try:
+        raw = _chat_once(cfg, [{"role": "user", "content": prompt}], cfg.get("fast_model") or cfg["model"])
+    except Exception as e:
+        console.print(f"[red]could not reach the model to write the skill: {e}[/red]")
+        return ("handled", None, None)
+
+    parsed = skills_mod.parse_capture(raw)
+    if not parsed["body"].strip():
+        console.print("[red]the model returned nothing usable; try again after a bit more work[/red]")
+        return ("handled", None, None)
+
+    try:
+        path = skills_mod.save(
+            name,
+            parsed["description"] or f"Saved from a session on {__import__('datetime').date.today()}",
+            parsed["body"],
+            when=parsed["when"],
+        )
+    except (ValueError, OSError) as e:
+        console.print(f"[red]{e}[/red]")
+        return ("handled", None, None)
+
+    console.print(f"[green]saved skill[/green] [bold]/{name}[/bold] [dim]→ {path}[/dim]")
+    console.print("[dim]Read it and fix anything wrong — it's plain markdown, and the model "
+                  "only saw the transcript. Available as a command on the next launch.[/dim]")
+    console.print(f"[dim]{skills_mod.open_in_editor(path)}[/dim]")
+    return ("handled", None, None)
+
+
+def _handle_skill(parts, line, cfg, messages, console):
+    """`/skill new|edit|delete <name>`."""
+    from . import skills as skills_mod
+
+    sub = parts[1].lower() if len(parts) >= 2 else ""
+    name = parts[2].split()[0] if len(parts) >= 3 else ""
+
+    if sub in ("new", "save", "capture"):
+        if not name:
+            console.print("[red]usage: /skill new <name>[/red]")
+            return ("handled", None, None)
+        return _capture_skill(name, cfg, messages, console)
+
+    if sub in ("edit", "delete", "rm") and name:
+        skill = skills_mod.get(name)
+        if not skill:
+            console.print(f"[red]no skill named '{name}'[/red] [dim](/skills to list)[/dim]")
+            return ("handled", None, None)
+        if sub == "edit":
+            console.print(f"[dim]{skills_mod.open_in_editor(skill.path)}[/dim]")
+        else:
+            from .tools.file_tools import delete_file
+            console.print(f"[dim]{delete_file({'path': str(skill.path)})}[/dim]")
+        return ("handled", None, None)
+
+    console.print("[dim]usage: /skill new <name> | /skill edit <name> | /skill delete <name>[/dim]")
+    return ("handled", None, None)
 
 
 def _handle_command(line, cfg, messages, console, session_path):
@@ -190,7 +320,27 @@ def _handle_command(line, cfg, messages, console, session_path):
             return ("handled", None, None)
         return ("run", prompt_text, [path])
 
+    if cmd == "/memory":
+        return _handle_memory(parts, cfg, console)
+    if cmd == "/skills":
+        _skill_report(console)
+        return ("handled", None, None)
+    if cmd == "/skill":
+        return _handle_skill(parts, line, cfg, messages, console)
+
+    # Anything else may be a saved skill: /<skill-name> [extra context]
+    from . import skills as skills_mod
+    available = skills_mod.discover()
+    skill = available.get(cmd[1:])
+    if skill is not None:
+        extra = line.split(maxsplit=1)[1] if len(line.split(maxsplit=1)) > 1 else ""
+        skills_mod.record_use(skill.name, source="command")
+        console.print(f"[dim]running skill [/dim][bold]{skill.name}[/bold][dim] ({skill.scope})[/dim]")
+        return ("run", skill.render(extra), None)
+
     console.print(f"[red]unknown command: {cmd}[/red] [dim](/help)[/dim]")
+    if available:
+        console.print(f"[dim]saved skills: {', '.join('/' + n for n in sorted(available))}[/dim]")
     return ("handled", None, None)
 
 
@@ -417,12 +567,13 @@ def main(argv: Optional[List[str]] = None) -> int:
     _ensure_utf8_output()
     parser = argparse.ArgumentParser(
         prog="gemma",
-        description="LOCAL-Intelligence — a fully local CLI AI agent with filesystem, shell, web and vision tools.",
+        description="LOCAL-Intelligence — a fully local CLI AI agent with filesystem, shell, document, web and vision tools.",
     )
     parser.add_argument(
         "command",
         nargs="*",
-        help="'go' to start an interactive chat session (optionally 'go <folder>'). "
+        help="'go' to start an interactive chat session (optionally 'go <folder>'), or "
+             "'skills' to list saved skills and their usage. "
              "Or pass a quoted question for a one-shot answer.",
     )
     parser.add_argument("-p", "--prompt", help="One-shot prompt; prints the answer and exits.")
@@ -448,6 +599,15 @@ def main(argv: Optional[List[str]] = None) -> int:
     if args.setup_config:
         path = write_default_config()
         console.print(f"[green]Config written:[/green] {path}")
+        return 0
+
+    # `gemma skills` — report without starting a session.
+    if args.command and args.command[0].lower() == "skills":
+        if len(args.command) > 1:
+            target = os.path.expanduser(args.command[1])
+            if os.path.isdir(target):
+                os.chdir(target)
+        _skill_report(console)
         return 0
 
     # Interpret the positional command: `go [folder]` => interactive session;

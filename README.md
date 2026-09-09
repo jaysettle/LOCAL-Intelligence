@@ -1,54 +1,20 @@
 # LOCAL-Intelligence
 
-A fully local, offline command-line AI agent. It runs a Gemma model on your own
-machine via [Ollama](https://ollama.com) and can actually **do things** — read,
-write, and delete files, run shell commands, search the web, and understand
-images — with no cloud, no API keys, and no data leaving your computer.
+A CLI AI agent that runs **entirely on your machine**. No cloud, no API keys, no data leaving your computer.
 
-Think of it as a local Claude/Codex CLI: you chat in the terminal, and it uses
-tools to work on your real filesystem.
+It reads and writes your files, runs shell commands, reads PDFs and Office documents, searches the web, and looks at images.
 
-```
-› what's taking up space in my Downloads folder?
+---
 
-🔧 shell  Get-ChildItem $HOME\Downloads | Sort Length -Desc | Select -First 5
-   installer.exe  (2.1 GB)  (+4 lines)
+## Before you start
 
-The five largest items in your Downloads folder are… [summary]
-```
+- **Windows 10/11**, Linux, or macOS
+- **~10 GB** free disk (for the model)
+- A GPU helps. CPU-only works, just slower.
 
-## What it can do
+The installer handles everything else.
 
-| Tool | Purpose |
-|------|---------|
-| `read_file` / `write_file` | Read files; write whole new files (fenced to allowed roots) |
-| `edit_file` | Change part of a file by exact string replacement (safe for edits) |
-| `delete_file` | Delete to the OS trash / Recycle Bin (recoverable) |
-| `shell` | Run **PowerShell** (Windows) or **bash** (Linux/macOS) commands |
-| `glob` / `grep` / `list_directory` | Find files, search contents, browse folders |
-| `web_search` / `web_fetch` | Search the web via a local SearXNG instance and read pages |
-| `remember` | Persist a durable fact to project or global memory |
-| `set_plan` / `complete_step` | Keep a checklist for multi-step tasks |
-| vision | Attach an image and ask about it (Gemma is multimodal) |
-
-### Memory, sessions & safety
-
-- **Memory** — a `GEMMA.md` in your project folder is auto-loaded into the agent's
-  context each run (like a project README for the AI); it can add to it with the
-  `remember` tool. A global memory file holds cross-project facts.
-- **Sessions** — conversations autosave per folder; `gemma go --resume` picks up
-  where you left off.
-- **Recoverable by default** — edits back up the prior version to `.gemma/backups/`;
-  deletes go to the Recycle Bin.
-- **Approval mode** — `gemma go --approve writes` prompts y/N before any file
-  change or shell command.
-
-## Requirements
-
-- **Windows 10/11** or Linux/macOS
-- ~10 GB free disk for the model (`gemma4:12b`)
-- A GPU helps a lot (an 8 GB card runs `gemma4:12b` well); CPU-only works but is slower
-- The installer handles Ollama, Python deps, and (optionally) SearXNG for you
+---
 
 ## Install
 
@@ -60,9 +26,6 @@ cd LOCAL-Intelligence
 powershell -ExecutionPolicy Bypass -File install.ps1
 ```
 
-No git? Download the repo ZIP from GitHub (**Code ▸ Download ZIP**), extract it,
-then run the same `install.ps1` line from inside the folder.
-
 ### Linux / macOS
 
 ```bash
@@ -71,126 +34,60 @@ cd LOCAL-Intelligence
 ./install.sh
 ```
 
-The installer will: install Ollama if missing → pull `gemma4:12b` → install the
-`gemma` CLI → write a default config → set up a local SearXNG search container
-(if Docker is present) → run a smoke test.
+**No git?** Download the ZIP (**Code ▸ Download ZIP**), extract, then run the same install line inside the folder.
 
-Installer flags: `-Model gemma4:e4b`, `-SkipModel`, `-SkipSearch`, `-SkipUpdate`
-(PowerShell) / `--model`, `--skip-model`, `--skip-search`, `--skip-update` (bash).
+Takes 10-20 min on first run — most of it is the model download.
 
-### Updating
+---
 
-Re-run the installer any time to update — it `git pull`s the latest, reinstalls
-the CLI, and **skips the large Ollama/model downloads when they're already
-present**, so an update is quick:
+## Start it
+
+```powershell
+cd C:\any\project\folder
+gemma go
+```
+
+That's it. It works in whatever folder you launch it from.
+
+---
+
+## Update
+
+Same command as install. Skips the big downloads.
 
 ```powershell
 cd LOCAL-Intelligence
 powershell -ExecutionPolicy Bypass -File .\install.ps1
 ```
 
-## Use
+---
 
-The primary way to use it is like a project-aware coding CLI: `cd` into a folder
-and start a chat session. The agent is oriented in that folder — it sees the
-files, relative paths resolve there, the shell runs there, and it can edit files
-there.
+## Installer flags
 
-```powershell
-cd C:\path\to\my-project
-gemma go                               # interactive chat, anchored in this folder
-```
+| PowerShell | bash | Does |
+|---|---|---|
+| `-Model gemma4:e4b` | `--model gemma4:e4b` | Smaller, faster model |
+| `-SkipModel` | `--skip-model` | Don't download the model |
+| `-SkipSearch` | `--skip-search` | Don't set up web search |
+| `-SkipUpdate` | `--skip-update` | Don't `git pull` first |
 
-Or point it at a folder directly:
+---
 
-```powershell
-gemma go C:\path\to\my-project         # chat session anchored in that folder
-```
+## If it breaks
 
-Other forms:
+**`gemma` not found** → open a new terminal.
 
-```bash
-gemma                                  # same as `gemma go` (uses current folder)
-gemma "what changed in this repo today?"   # one-shot, prints and exits
-gemma -p "summarize todo.md"           # one-shot (explicit flag form)
-gemma -i photo.jpg -p "what is this?"  # attach an image (vision)
-gemma --model gemma4:e4b               # use the smaller/faster edge model
-gemma --no-thinking                    # hide the model's reasoning
-gemma --verbose                        # show full tool output
-```
+**Install fails, mentions `gemma.exe`** → close every running `gemma` session, then re-run.
 
-REPL commands: `/paste`, `/image <path> <prompt>`, `/clear` (reset),
-`/model <tag>` (switch), `/save`, `/resume [name]`, `/sessions`, `/help`, `/exit`.
+**"Can't reach Ollama"** → start Ollama (the app, or `ollama serve`).
 
-### Live interactive REPL
+**Web search unavailable** → needs Docker Desktop running. Everything else still works without it.
 
-When you run `gemma go` in a real terminal, the input stays live while the model
-answers:
+---
 
-- **Type-ahead queue** — start typing your next prompt while it's still
-  responding; press Enter and it queues, running as soon as the current answer
-  finishes.
-- **Esc** — stops the current response (any queued prompts still run).
-- **Alt+V** — pastes an image from your clipboard (snip with **Win+Shift+S**,
-  then Alt+V), or use `/paste`.
-- **Status line** — under the input, shows the working folder plus live
-  **GPU / VRAM / CPU** usage while it's working (needs `nvidia-smi` for GPU; shows
-  `n/a` otherwise). Configure via `status_line`, `status_segments`, and
-  `status_refresh` in `config.yaml`.
+## Next
 
-(Piped/scripted input, and `--approve` mode, use a simpler line-by-line reader.)
+- **[How to use it →](docs/USAGE.md)** — commands, config, tools, safety
+- Config file lives at `%APPDATA%\gemma-cli\config.yaml` (Windows) or `~/.config/gemma-cli/config.yaml`
 
-The folder you launch in is automatically added to the writable roots, so the
-agent can create and edit files in your project — but not outside the allowed
-roots (your home, temp, and the launch folder by default).
-
-## Configuration
-
-A config file is created on first install:
-
-- **Windows:** `%APPDATA%\gemma-cli\config.yaml`
-- **Linux/macOS:** `~/.config/gemma-cli/config.yaml`
-
-```yaml
-model: gemma4:12b
-num_ctx: 32768              # context window; raise if you have VRAM headroom
-ollama_url: http://localhost:11434
-searxng_url: http://localhost:8899
-keep_alive: 30m
-max_tool_iterations: 25
-show_thinking: true
-allowed_write_roots:       # the agent may only write under these paths
-  - C:\Users\you
-  - C:\Users\you\AppData\Local\Temp
-```
-
-Any setting can be overridden by an environment variable (`GEMMA_MODEL`,
-`GEMMA_NUM_CTX`, `GEMMA_OLLAMA_URL`, `GEMMA_SEARXNG_URL`, …) or a CLI flag.
-
-## Web search
-
-Search is powered by a local [SearXNG](https://github.com/searxng/searxng)
-container (no API keys, no quotas). The installer sets it up automatically if
-Docker is available. Without it, every other tool still works — search just
-reports that it's unavailable. To add it later: install Docker Desktop and re-run
-the installer.
-
-## Safety
-
-The agent runs with **your** user privileges — that's the point; it's your
-machine. Guard rails:
-
-- **Writes** are restricted to `allowed_write_roots` (your home + temp by default).
-- The **shell** tool blocks obviously destructive commands (drive formatting,
-  registry-hive deletion, shutdown, `rm -rf /`, etc.). This is a guard rail, not
-  a sandbox — review what you ask it to do.
-
-## How it works
-
-`gemma` calls Ollama's `/api/chat` with function-calling tool definitions. When
-the model requests a tool, the CLI executes it locally, feeds the result back,
-and loops until the model produces a final answer — all on your hardware.
-
-## License
-
-MIT
+MIT licensed.
