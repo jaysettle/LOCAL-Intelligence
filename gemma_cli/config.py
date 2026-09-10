@@ -31,6 +31,20 @@ DEFAULTS: Dict[str, Any] = {
     "keep_alive": "30m",
     "max_tool_iterations": 25,
     "show_thinking": True,
+    # Generate the model's reasoning at all. Measured on an RTX 2070 with
+    # gemma4:12b: a trivial turn took 67s with thinking and 10s without.
+    # --no-thinking sets this False (it used to only HIDE the reasoning).
+    "thinking": True,
+    # Child runs (a skill in per-file mode runs one child per file): thinking is
+    # off for them by default because their work is mechanical and they run N
+    # times; a smaller tool budget and a capped result keep them bounded.
+    "child_thinking": False,
+    "child_max_tool_iterations": 10,
+    "child_result_chars": 2000,
+    # Children get no write_file/edit_file/delete_file/shell unless a skill sets
+    # child_writes: true. The final synthesis turn is where files get written.
+    "child_readonly": True,
+    "per_file_max_items": 12,
     # None => defaults to [home, tempdir, cwd] at load time
     "allowed_write_roots": None,
     "timeout": 600,
@@ -58,6 +72,10 @@ DEFAULTS: Dict[str, Any] = {
     "live_repl": False,
 }
 
+def _as_bool(value: str) -> bool:
+    return str(value).strip().lower() not in ("0", "false", "no", "off", "")
+
+
 _ENV_MAP = {
     "GEMMA_MODEL": ("model", str),
     "GEMMA_NUM_CTX": ("num_ctx", int),
@@ -65,6 +83,7 @@ _ENV_MAP = {
     "GEMMA_SEARXNG_URL": ("searxng_url", str),
     "GEMMA_KEEP_ALIVE": ("keep_alive", str),
     "GEMMA_MAX_TOOL_ITERATIONS": ("max_tool_iterations", int),
+    "GEMMA_THINKING": ("thinking", _as_bool),
 }
 
 

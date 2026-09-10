@@ -54,7 +54,7 @@ close every one and re-run.
 ### REPL commands
 
 `/paste` · `/image <path> <prompt>` · `/clear` · `/model <tag>` · `/save` · `/resume [name]` ·
-`/sessions` · `/memory [global]` · `/skills` · `/skill new <name>` · `/<skill-name>` · `/help` · `/exit`
+`/sessions` · `/memory [global]` · `/skills` · `/skill new <name>` · `/<skill-name>` · `/check` · `/help` · `/exit`
 
 ### Status bar
 
@@ -202,6 +202,61 @@ matches a `when` line. If your model over-triggers, turn that off — `/<name>` 
 allow_model_skills: false   # in config.yaml
 ```
 
+### Per-file skills — one file per context
+
+Some jobs don't fit in one context: "summarise every document in this folder" fills a 32K window
+by the fourth PDF. A skill can declare that it runs **once per file**:
+
+```markdown
+---
+name: doc-index
+description: One line per document, then write INDEX.md
+mode: per-file
+glob: "*.pdf, *.docx, *.xlsx"
+---
+1. Read the file with read_document.
+2. Reply with one line: what it is and the key facts (dates, totals, names).
+3. In the final step, write all lines to INDEX.md as a table.
+```
+
+`/doc-index` then runs the procedure in a **fresh child context for each file** — thinking off,
+a small tool budget, only its one-line result kept — and finishes with one normal turn over the
+collected results:
+
+```
+> /doc-index
+· doc-index: 3 file(s), each in its own context, thinking off
+    ↳ read_document costs.xlsx
+  ↳ [1/3] costs.xlsx: Expense sheet — sensor units $4,200, shipping $310
+    ↳ read_document field_report.docx
+  ↳ [2/3] field_report.docx: Q3 field report — north array down 6 days in August
+  ...
+🔧 write_file INDEX.md
+Wrote INDEX.md with 3 entries.
+```
+
+The decision to split is yours (the frontmatter), never the model's. It stops at
+`per_file_max_items` (12) and tells you when it did.
+
+**Children are read-only.** They get no `write_file`, `edit_file`, `delete_file` or `shell` — enforced
+by withholding the tools, not by asking. Writing (the index, the report) is the final step's job.
+The first live run showed why: given a skill ending in "write everything to INDEX.md", child #1
+wrote INDEX.md with its one line and child #2 would have overwritten it. A skill that genuinely
+must write per file sets `child_writes: true` in its frontmatter.
+
+Settings: `child_thinking`, `child_readonly`, `child_max_tool_iterations`, `child_result_chars`.
+
+### Checking an answer
+
+```
+/check
+```
+
+Runs a second, thinking-free pass over the **last** turn only — the question, the tool results the
+model actually received, and its answer — and reports claims the evidence doesn't support, steps it
+skipped, numbers that don't match. About ten seconds. It never rewrites the answer; it tells you
+what to doubt.
+
 ### Capturing a skill
 
 `/skill new <name>` sends the current conversation back to the model and asks it to write up the
@@ -250,7 +305,14 @@ ollama_url: http://localhost:11434
 searxng_url: http://localhost:8899
 keep_alive: 30m
 max_tool_iterations: 25
-show_thinking: true
+thinking: true              # false = don't GENERATE reasoning (--no-thinking). Measured on an
+                            # 8 GB RTX 2070: a trivial turn went from 67 s to 10 s. Slightly
+                            # weaker on hard tasks; a big win for everything else.
+show_thinking: true         # display it when it is generated
+child_thinking: false       # per-file child runs: mechanical work, thinking off
+child_max_tool_iterations: 10
+child_result_chars: 2000
+per_file_max_items: 12
 allow_model_skills: true    # let the model load skills itself; /<name> works either way
 allowed_write_roots:        # the agent may only write under these paths
   - C:\Users\you

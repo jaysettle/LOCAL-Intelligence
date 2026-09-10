@@ -162,6 +162,29 @@ class Renderer:
                 close_stream()
                 self.console.print(f"[bold red]Error:[/bold red] {escape(str(payload))}")
 
+            elif kind == "child":
+                # A child run's own events, shown indented and compact: its tool
+                # activity and errors, not its streamed text (the result line
+                # arrives as child_result). --verbose shows the text too.
+                ck, cp = payload
+                if ck == "tool_start":
+                    close_stream()
+                    name = escape(str((cp or {}).get("name", "")))
+                    preview = escape(_arg_preview((cp or {}).get("args", {}) or {}))
+                    self.console.print(f"    [dim]↳[/dim] [cyan]{name}[/cyan] [dim]{preview}[/dim]")
+                elif ck == "error":
+                    close_stream()
+                    self.console.print(f"    [dim]↳[/dim] [red]Error:[/red] {escape(str(cp))}")
+                elif ck == "text" and self.verbose:
+                    stream(str(cp), "dim")
+
+            elif kind == "child_result":
+                close_stream()
+                res = (payload.get("result") or "").strip()
+                first = res.splitlines()[0] if res else "(no result)"
+                label = escape(str(payload.get("label", "")))
+                self.console.print(f"  [dim]↳ {label}:[/dim] {escape(first[:110])}")
+
             elif kind == "done":
                 close_stream()
 

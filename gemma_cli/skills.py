@@ -57,6 +57,12 @@ class Skill:
     scope: str = "project"          # "project" | "global"
     when: str = ""
     meta: Dict[str, Any] = field(default_factory=dict)
+    # mode: "" (one turn) or "per-file" (one child run per matching file, then a
+    # synthesis turn over the results). globs: patterns relative to the cwd.
+    mode: str = ""
+    globs: List[str] = field(default_factory=list)
+    # child_writes: let per-file children use mutating tools (default: read-only).
+    child_writes: bool = False
 
     def render(self, extra: str = "") -> str:
         """The message handed to the model when this skill is invoked."""
@@ -78,6 +84,86 @@ class Skill:
             "apply, and say so when you do."
         )
         return "\n".join(parts)
+
+    @property
+    def per_file(self) -> bool:
+        return self.mode == "per-file"
+
+    def render_item(self, path, extra: str = "") -> str:
+        """The prompt a child run gets for ONE file in per-file mode."""
+        parts = [
+            f"You are handling ONE item of a larger task. The item is the file `{path}`.",
+            "Follow the procedure below for THIS FILE ONLY. Do not look at other files.",
+            "Steps that combine results across files or write a final output (an index, a report, "
+            "a summary file) are NOT yours - they run once, later, after every file. Skip them silently.",
+            "",
+            f"# Skill: {self.name}",
+            self.body.strip(),
+        ]
+        if extra.strip():
+            parts += ["", f"The user added for this run: {extra.strip()}"]
+        parts += [
+            "",
+            "When done, reply with ONLY the result for this file: one to three short lines, "
+            "no preamble. Include the concrete facts (numbers, dates, names) you found.",
+        ]
+        return "\n".join(parts)
+
+    def render_synthesis(self, results, extra: str = "") -> str:
+        """The parent-turn prompt after every item has been processed."""
+        lines = [
+            f"# Skill: {self.name} — final step",
+            "Each file below was already processed in its own context by following this procedure:",
+            "",
+            self.body.strip(),
+            "",
+            "Per-file results:",
+        ]
+        for name, result in results:
+            body = (result or "(no result)").strip().replace("\n", " ")
+            lines.append(f"- {name}: {body}")
+        if extra.strip():
+            lines += ["", f"The user added for this run: {extra.strip()}"]
+        lines += [
+            "",
+            "Now finish the task from these results. If the procedure says to write a file, "
+            "write it with write_file. Do NOT re-read the files; the results above are the evidence.",
+        ]
+        return "\n".join(lines)
+
+
+def _parse_globs(value) -> List[str]:
+    """`glob:` may be a string ("*.pdf, *.docx") or a YAML list."""
+    if not value:
+        return []
+    if isinstance(value, (list, tuple)):
+        items = [str(v) for v in value]
+    else:
+        items = str(value).split(",")
+    return [g.strip() for g in items if g and g.strip()]
+
+
+def discover_items(skill: "Skill", cwd: Optional[Path] = None, limit: Optional[int] = None):
+    """Files matching a per-file skill's globs, sorted, files only, capped.
+
+    Returns (items, total_matched). Callers should say so when items < total —
+    a silent cap reads as "did everything" when it didn't.
+    """
+    base = Path(cwd) if cwd else Path.cwd()
+    patterns = skill.globs or ["*"]
+    seen = {}
+    for pattern in patterns:
+        for p in base.glob(pattern):
+            try:
+                if p.is_file() and not p.name.startswith("."):
+                    seen[str(p.resolve())] = p
+            except OSError:
+                continue
+    items = sorted(seen.values(), key=lambda p: p.name.lower())
+    total = len(items)
+    if limit is not None and limit > 0:
+        items = items[:limit]
+    return items, total
 
 
 def is_valid_name(name: str) -> bool:
@@ -147,6 +233,9 @@ def parse_skill(path: Path, scope: str) -> Optional[Skill]:
         scope=scope,
         when=str(meta.get("when") or "").strip(),
         meta=meta,
+        mode=str(meta.get("mode") or "").strip().lower().replace("_", "-"),
+        globs=_parse_globs(meta.get("glob", meta.get("globs"))),
+        child_writes=bool(meta.get("child_writes", False)),
     )
 
 

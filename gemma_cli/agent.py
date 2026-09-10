@@ -82,6 +82,8 @@ def _chat_once(cfg: Dict[str, Any], messages: List[Dict], model: str, on_token=N
         "keep_alive": cfg.get("keep_alive", "30m"),
         "options": {"num_ctx": int(cfg.get("num_ctx", 32768))},
     }
+    if not cfg.get("thinking", True):
+        payload["think"] = False
     resp = requests.post(url, json=payload, stream=True, timeout=int(cfg.get("timeout", 600)))
     resp.raise_for_status()
 
@@ -154,8 +156,16 @@ def run_turn(
     image_paths: Optional[List[str]] = None,
     approver=None,
     cancel=None,
+    *,
+    tools: Optional[List[Dict]] = None,
+    max_iters: Optional[int] = None,
+    think: Optional[bool] = None,
 ) -> Iterator[Event]:
     """Run one user turn to completion (through any number of tool calls).
+
+    tools / max_iters / think override the defaults for one call. Child runs
+    (see run_child) use them to give a subtask a narrower tool set, a smaller
+    iteration budget, and thinking off.
 
     approver: optional callable (name, args) -> bool. When set, mutating tools
     (write_file, edit_file, delete_file, shell) are gated on its approval.
@@ -175,7 +185,11 @@ def run_turn(
         yield ("notice", notice)
 
     url = f"{cfg['ollama_url'].rstrip('/')}/api/chat"
-    max_iters = int(cfg.get("max_tool_iterations", 25))
+    max_iters = int(max_iters if max_iters is not None else cfg.get("max_tool_iterations", 25))
+    tools = OLLAMA_TOOLS if tools is None else tools
+    # Only ever SEND the field when disabling: models without a thinking mode
+    # reject it, and the default must keep working for them.
+    think_on = cfg.get("thinking", True) if think is None else bool(think)
     mutating = {"write_file", "edit_file", "delete_file", "shell"}
 
     recent_sigs: List[str] = []  # for loop detection
@@ -185,11 +199,13 @@ def run_turn(
         payload = {
             "model": cfg["model"],
             "messages": messages,
-            "tools": OLLAMA_TOOLS,
+            "tools": tools,
             "stream": True,
             "keep_alive": cfg.get("keep_alive", "30m"),
             "options": {"num_ctx": int(cfg.get("num_ctx", 32768))},
         }
+        if not think_on:
+            payload["think"] = False
 
         content_acc = ""
         tool_calls: List[Dict] = []
@@ -310,3 +326,80 @@ def run_turn(
 
     yield ("text", "\n\n_(stopped: reached the tool-call limit for one message)_\n")
     yield ("done", None)
+
+
+# ---------------------------------------------------------------------------
+# Child runs — the primitive under every form of "recursion" here
+# ---------------------------------------------------------------------------
+
+# Tools a child may never call. Empty today; a model-callable `delegate` tool
+# goes here the day it exists, which is what caps recursion depth at 1 in code
+# rather than in a prompt.
+CHILD_EXCLUDED_TOOLS = frozenset()
+
+# What a read-only child may not do. Observed live: given a per-file skill whose
+# last step was "write everything to INDEX.md", the FIRST child wrote INDEX.md
+# with its one line - and the next child would have overwritten it. Writing is
+# the synthesis turn's job; children read.
+MUTATING_TOOLS = frozenset({"write_file", "edit_file", "delete_file", "shell"})
+
+
+def run_child(
+    cfg: Dict[str, Any],
+    task: str,
+    *,
+    label: str = "",
+    context: str = "",
+    approver=None,
+    cancel=None,
+    out: Optional[Dict[str, Any]] = None,
+    readonly: bool = False,
+) -> Iterator[Event]:
+    """Run one scoped subtask in a FRESH context and hand back only its result.
+
+    readonly=True withholds MUTATING_TOOLS from the child entirely - enforced by
+    the tool list, not by asking nicely.
+
+    Why this exists: there is one GPU, so a second context buys no speed. What it
+    buys is isolation. Reading twelve documents inside the parent turn fills a
+    32K window; reading them in twelve children leaves the parent with twelve
+    result lines. The child's transcript is discarded on purpose.
+
+    The child gets its own system prompt (cwd, memory, skill index — the fixed
+    cost of a child, ~2-3K tokens), the task, no parent history, a smaller
+    iteration budget, thinking OFF by default (measured: thinking is ~85% of a
+    trivial turn on an 8 GB box, and child work is mechanical), and every tool
+    except CHILD_EXCLUDED_TOOLS. It inherits the approver gate and cancel event.
+
+    Yields ("child", (kind, payload)) for each of the child's own events so a
+    renderer can show them indented, then ("child_result", {"label", "result"}).
+    The result is capped at child_result_chars. If `out` is given, the result is
+    also stored in out["result"] for callers iterating the events elsewhere.
+    """
+    from .sysprompt import build_system_prompt
+
+    child_cfg = dict(cfg)
+    child_cfg["thinking"] = bool(cfg.get("child_thinking", False))
+    blocked = set(CHILD_EXCLUDED_TOOLS)
+    if readonly:
+        blocked |= MUTATING_TOOLS
+    tools = [t for t in OLLAMA_TOOLS if t["function"]["name"] not in blocked]
+    iters = int(cfg.get("child_max_tool_iterations", 10))
+    cap = int(cfg.get("child_result_chars", 2000))
+
+    messages: List[Dict] = [{"role": "system", "content": build_system_prompt(child_cfg)}]
+    prompt = f"{context.strip()}\n\n{task.strip()}" if context.strip() else task.strip()
+
+    final: List[str] = []
+    for kind, payload in run_turn(child_cfg, messages, prompt, approver=approver, cancel=cancel,
+                                  tools=tools, max_iters=iters):
+        if kind == "text":
+            final.append(payload)
+        yield ("child", (kind, payload))
+
+    result = "".join(final).strip()
+    if len(result) > cap:
+        result = result[:cap].rstrip() + " …(truncated)"
+    if out is not None:
+        out["result"] = result
+    yield ("child_result", {"label": label, "result": result})
