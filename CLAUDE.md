@@ -11,7 +11,7 @@ Guidance for Claude (and humans) working on this repo. Read this before making c
 The installed command is **`gemma`**. Primary entry: `gemma go` (interactive chat, anchored in the current folder).
 
 - **Language:** Python 3.10+. **Deps:** `requests`, `rich`, `pyyaml`, `send2trash`, `pillow`, `prompt_toolkit`, `psutil`, plus the document backends `pypdf`, `python-docx`, `openpyxl`, `python-pptx`, `striprtf`, `xlrd` (all MIT/BSD, pure/prebuilt, small — keep it that way).
-- **Model:** `gemma4:12b` by default; `gemma4:e4b` for a smaller/faster fallback.
+- **Model:** `gemma4:12b` by default (7.0 GB download); `gemma4:e4b` is the edge fallback. Note `e4b` is the LARGER download (9.0 GB, measured from the registry manifest) despite the "small model" framing — its advantage is fitting an 8 GB GPU fully, not being smaller on disk.
 - **Backend:** Ollama's HTTP API (`/api/chat`, native function-calling). Never talk to Ollama any other way.
 
 ---
@@ -30,6 +30,7 @@ The installed command is **`gemma`**. Primary entry: `gemma go` (interactive cha
 | `gemma_cli/sysprompt.py` | Builds the system prompt, templated from the host (user, host, OS, cwd + listing, date/time, memory, skill index) |
 | `gemma_cli/render.py` | `Renderer` — rich-based output for the one-shot / plain paths |
 | `gemma_cli/sessions.py` | Save/restore conversations under `.gemma/sessions/` (per project) |
+| `gemma_cli/updater.py` | `gemma update` — locate the checkout, git pull, reinstall (deferred on Windows) |
 | `gemma_cli/skills.py` | Skill discovery, frontmatter parsing, the system-prompt index, capture-from-transcript, usage reporting |
 | `gemma_cli/statusline.py` | GPU/CPU/VRAM sampling (nvidia-smi + psutil) + toolbar string for the live REPL |
 | `gemma_cli/clipboard.py` | Grab an image off the clipboard (Pillow `ImageGrab`) for `/paste` and Alt+V |
@@ -73,6 +74,7 @@ The installed command is **`gemma`**. Primary entry: `gemma go` (interactive cha
 - **Document reading is a targeted dispatcher, not a mega-library.** `read_document` picks a small backend per format (pypdf / python-docx / openpyxl / python-pptx / striprtf / xlrd) and uses the standard library alone for OpenDocument, EPUB, `.eml`, `.ipynb` and CSV. **Do not swap this for `markitdown`:** its *base* install pulls `magika` → `onnxruntime` + `numpy` + `protobuf` (~300 MB of ML runtime, just for file-type sniffing) and still ships none of the parsers — they are extras. That breaks the "small, offline, prebuilt wheels" constraint. Same reasoning rules out `extract-msg` for `.msg`: 20+ transitive packages including GPLv3/LGPLv3, in an MIT repo.
 - **Skills load progressively — never inline a body in the system prompt.** `skills.index_block()` emits names + one-line descriptions only (~15 tokens each); bodies load when a skill is actually invoked (`/<name>`, or the model calling `load_skill`). This is the whole design: twenty skill bodies inlined would cost a third of a 32K window before the user types anything. If you add a field to the index, check what it costs × 40 skills.
 - **Skill names are a security boundary, not a label.** They become slash commands *and* filenames, so `skills._SAFE_NAME` is anchored and rejects dots and separators — a `name:` in frontmatter can never escape the skills dir. A frontmatter name that fails validation falls back to the filename stem. Keep it that way.
+- **`gemma update` must never reinstall in-place on Windows.** Windows holds `gemma.exe` open while it runs; a pip reinstall launched from inside a running `gemma` is exactly what leaves a corrupt `~ocal_intelligence*.dist-info` behind and jams the *next* install (see the install-failure pitfall below). So the git pull runs inline and the install is handed to a helper that waits on the parent PID first. Two details that matter: the lock is **tested**, not inferred — `_launcher_is_locked()` asks Windows for a write handle on `gemma.exe`, because `sys.argv[0]` varies with whichever console-script launcher pip generated — and the helper waits using stdlib `ctypes`, **not `psutil`**, since a compiled extension can fail to import at runtime and the updater is the one tool that must still work when the environment is broken.
 - **A skill body is executed instructions.** It is the user's own file on their own machine, so the trust model is the same as a shell script — but that is why `load_skill` is gated by `allow_model_skills` and why the docs warn about skills from other people.
 - **Format is decided by content, not extension.** `doc_tools._sniff` reads magic bytes and looks *inside* ZIP containers for the marker entry (`word/document.xml`, `xl/workbook.xml`, `mimetype`), so renamed files still work. Extraction output is labelled by page/sheet/slide and capped by `max_chars` with `offset`/`limit` paging — a 400-page PDF must never be handed whole to a 32K context.
 
@@ -86,6 +88,8 @@ The installed command is **`gemma`**. Primary entry: `gemma go` (interactive cha
 - **`ollama` isn't on PATH in terminals opened before Ollama was installed.** The installer must detect Ollama at its known install path (`%LOCALAPPDATA%\Programs\Ollama\ollama.exe`), not just via PATH — otherwise it needlessly re-downloads Ollama and the user has to open a fresh terminal.
 
 ### Ollama / model
+- **`install.ps1` hangs after installing Ollama when its output is redirected.** Observed on a clean machine (no prior Ollama, no Python) running `powershell -File install.ps1 -SkipSearch` with stdout piped to a file: Ollama installed fine (0.33.3, API answering), then the script blocked — 0% CPU, no child processes, never reaching the model pull. Cause unconfirmed; the leading suspect is `Start-Process $OllamaExe -ArgumentList "serve" -WindowStyle Hidden` inheriting the script's stdout handle and never releasing it. It may not reproduce interactively, which would explain why it was never noticed. **Repro: run the installer with output piped to a file.** Until it is fixed, a clean install can be finished by hand: `ollama pull gemma4:12b` then `pip install <repo>`.
+- **The 35% CPU spill is measured, not estimated.** On an RTX 2070 (8 GB) with `num_ctx: 32768`, `ollama ps` reports exactly `35%/65% CPU/GPU` for `gemma4:12b` — 5.89 GB in VRAM, 3.11 GB on CPU, 7714/8192 MiB used. A trivial one-line prompt takes ~2 minutes cold. This matches the estimate below.
 - **winget's Ollama package lags** (was 0.31.2 when gemma4 needed ≥ 0.32). The installer downloads `OllamaSetup.exe` from ollama.com directly. `gemma4` requires Ollama ≥ 0.32.
 - **8 GB VRAM cannot fully fit `gemma4:12b`.** Weights alone are ~7.6 GB; with any KV cache the footprint exceeds ~6.5 GB usable VRAM, so ~35% of layers spill to CPU (the slowness). Mitigations, in order: lower `num_ctx` (32K→16K), set `OLLAMA_FLASH_ATTENTION=1` + `OLLAMA_KV_CACHE_TYPE=q8_0`, close GPU-hungry apps, or switch to `gemma4:e4b` (fits fully). None make 12B 100% GPU on 8 GB — that's a hardware ceiling. Verify with `ollama ps` mid-generation (the `PROCESSOR` column) or `GET /api/ps` (`size_vram` vs `size`).
 - **Small models are limited by design.** `gemma4:e4b` (~4-8B) is good only for mechanical/agent tasks (tool-calling, RAG, instruction-following), not reasoning/synthesis. 12B is the floor for logic. Don't benchmark it against frontier cloud models.
@@ -107,7 +111,7 @@ The installed command is **`gemma`**. Primary entry: `gemma go` (interactive cha
 
 ---
 
-## Current state (v0.4.0)
+## Current state (v0.5.0)
 
 **Working and shipped (default `gemma go`, the plain REPL):**
 - Agentic tool loop; tools: `read_file`, `read_document`, `write_file`, `edit_file`, `delete_file`, `shell`, `glob`, `grep`, `list_directory`, `web_search`, `web_fetch`, `remember`, `load_skill`, `set_plan`, `complete_step`.
@@ -116,7 +120,8 @@ The installed command is **`gemma`**. Primary entry: `gemma go` (interactive cha
 - Document reading (`read_document`): PDF, Word, Excel, PowerPoint, OpenDocument, RTF, EPUB, `.eml`, `.ipynb`, CSV/TSV, HTML; content-sniffed format detection, page/sheet/slide paging, LibreOffice fallback for legacy `.doc`/`.ppt`.
 - Skills: markdown procedures in `skills/` (project) and `<config_dir>/skills/` (global), run as `/<name>`, captured from a transcript with `/skill new <name>`, reported by `/skills` and `gemma skills`. Index-only system-prompt injection; `load_skill` tool gated by `allow_model_skills`.
 - Human-writable memory surfaced with `/memory` and `/memory global` (the files themselves predate this).
-- 104 pytest cases (`tests/test_doc_tools.py` builds a real file per format — no mocks; `tests/test_skills.py` redirects the global skills dir into tmp so a run never touches the real config dir).
+- `gemma update` from any folder: finds the checkout, pulls, reinstalls; `--check`, `--full`, `--repo`.
+- 141 pytest cases (`tests/test_doc_tools.py` builds a real file per format — no mocks; `tests/test_skills.py` redirects the global skills dir into tmp so a run never touches the real config dir).
 
 **Experimental (opt-in via `--live`):**
 - Live REPL: type-ahead queue, Esc-to-cancel, live GPU/CPU/VRAM status line. Functional but can render awkwardly on some Windows consoles. Needs real-terminal validation before promotion.
@@ -130,7 +135,7 @@ The installed command is **`gemma`**. Primary entry: `gemma go` (interactive cha
 ```bash
 # from a clone
 pip install -e .            # or: pip install .
-pytest -q                   # run the test suite (104 cases)
+pytest -q                   # run the test suite (141 cases)
 gemma --version             # verify the installed entry point
 gemma "what is 2+2"         # one-shot smoke test (needs Ollama running)
 ```

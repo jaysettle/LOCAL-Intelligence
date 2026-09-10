@@ -39,6 +39,9 @@ DEFAULTS: Dict[str, Any] = {
     "global_memory_file": None,  # None => <config_dir>/memory.md
     # Reliability
     "compact_at_ratio": 0.75,   # summarize old turns past this fraction of num_ctx
+    # Where the source checkout lives, for `gemma update`. Filled in automatically
+    # the first time an update runs.
+    "repo_dir": None,
     # Skills: let the model load a saved skill on its own via the load_skill tool.
     # Turn off if a small model over-triggers; /<name> still works either way.
     "allow_model_skills": True,

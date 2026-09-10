@@ -9,6 +9,8 @@ LOCAL-Intelligence CLI entry point.
   gemma -p "prompt"             one-shot (explicit flag form)
   gemma -i img.png -p "..."     attach an image (vision)
   gemma --model gemma4:e4b      override model for this run
+  gemma update                  pull the latest source and reinstall, then exit
+  gemma update --check          say whether an update is available, install nothing
   gemma skills [folder]         list saved skills and their usage, then exit
   gemma --setup-config          write a default config.yaml and exit
 
@@ -203,17 +205,48 @@ def _capture_skill(name, cfg, messages, console):
         console.print("[yellow]Not enough conversation yet to turn into a skill. Do the task first, then run this.[/yellow]")
         return ("handled", None, None)
 
-    console.print(f"[dim]writing the skill from this conversation…[/dim]")
+    console.print("[dim]writing the skill from this conversation (this can take a minute)…[/dim]")
     prompt = skills_mod._CAPTURE_PROMPT.format(transcript=transcript)
-    try:
-        raw = _chat_once(cfg, [{"role": "user", "content": prompt}], cfg.get("fast_model") or cfg["model"])
-    except Exception as e:
-        console.print(f"[red]could not reach the model to write the skill: {e}[/red]")
-        return ("handled", None, None)
 
-    parsed = skills_mod.parse_capture(raw)
+    # Show progress: on a CPU-spilled local model this runs for minutes, and a
+    # silent terminal is indistinguishable from a hang.
+    state = {"chars": 0, "dots": 0}
+
+    def tick(piece: str) -> None:
+        state["chars"] += len(piece)
+        while state["chars"] // 80 > state["dots"]:
+            state["dots"] += 1
+            print(".", end="", flush=True)
+
+    raw = ""
+    error = None
+    try:
+        raw = _chat_once(cfg, [{"role": "user", "content": prompt}],
+                         cfg.get("fast_model") or cfg["model"], on_token=tick)
+    except Exception as e:
+        error = e
+    if state["dots"]:
+        print(flush=True)
+
+    parsed = skills_mod.parse_capture(raw) if raw.strip() else {"description": "", "when": "", "body": ""}
+
     if not parsed["body"].strip():
-        console.print("[red]the model returned nothing usable; try again after a bit more work[/red]")
+        # Never discard the user's work just because the model call failed —
+        # save the transcript as a draft they can edit into a real skill.
+        reason = f"the model call failed ({error})" if error else "the model returned nothing usable"
+        console.print(f"[yellow]{reason}.[/yellow]")
+        draft = (
+            "DRAFT - the model could not write this up, so here is the raw transcript.\n"
+            "Edit it into numbered steps and delete this notice.\n\n"
+            "```\n" + transcript[-6000:] + "\n```\n"
+        )
+        try:
+            path = skills_mod.save(name, f"DRAFT captured from a session", draft)
+        except (ValueError, OSError) as e:
+            console.print(f"[red]could not save a draft either: {e}[/red]")
+            return ("handled", None, None)
+        console.print(f"[green]saved a draft[/green] [dim]{path}[/dim] [dim]- your work is not lost.[/dim]")
+        console.print(f"[dim]{skills_mod.open_in_editor(path)}[/dim]")
         return ("handled", None, None)
 
     try:
@@ -572,8 +605,9 @@ def main(argv: Optional[List[str]] = None) -> int:
     parser.add_argument(
         "command",
         nargs="*",
-        help="'go' to start an interactive chat session (optionally 'go <folder>'), or "
-             "'skills' to list saved skills and their usage. "
+        help="'go' to start an interactive chat session (optionally 'go <folder>'), "
+             "'update' to pull the latest source and reinstall, or 'skills' to list "
+             "saved skills and their usage. "
              "Or pass a quoted question for a one-shot answer.",
     )
     parser.add_argument("-p", "--prompt", help="One-shot prompt; prints the answer and exits.")
@@ -590,6 +624,11 @@ def main(argv: Optional[List[str]] = None) -> int:
                         help="Require y/N approval before mutating actions (file writes/edits/deletes, shell).")
     parser.add_argument("--live", action="store_true",
                         help="Experimental live REPL: type-ahead queue, Esc-cancel, live status line.")
+    parser.add_argument("--check", action="store_true",
+                        help="With 'update': report whether newer commits exist, without installing.")
+    parser.add_argument("--full", action="store_true",
+                        help="With 'update': run the full installer (also checks Ollama, the model and SearXNG).")
+    parser.add_argument("--repo", help="With 'update': path to the LOCAL-Intelligence source checkout.")
     parser.add_argument("--version", action="version", version=f"LOCAL-Intelligence {__version__}")
     args = parser.parse_args(argv)
 
@@ -600,6 +639,13 @@ def main(argv: Optional[List[str]] = None) -> int:
         path = write_default_config()
         console.print(f"[green]Config written:[/green] {path}")
         return 0
+
+    # `gemma update` — pull the latest source and reinstall, then exit.
+    if args.command and args.command[0].lower() == "update":
+        from .updater import update
+        repo_arg = args.repo or (args.command[1] if len(args.command) > 1 else None)
+        return update(load_config({}), console, repo_arg=repo_arg,
+                      check_only=args.check, full=args.full)
 
     # `gemma skills` — report without starting a session.
     if args.command and args.command[0].lower() == "skills":

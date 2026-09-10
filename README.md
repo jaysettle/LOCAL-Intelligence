@@ -53,11 +53,17 @@ That's it. It works in whatever folder you launch it from.
 
 ## Update
 
-Same command as install. Skips the big downloads.
+From any folder, any terminal:
 
-```powershell
-cd LOCAL-Intelligence
-powershell -ExecutionPolicy Bypass -File .\install.ps1
+```
+gemma update
+```
+
+That's the whole thing. It pulls the latest and reinstalls.
+
+```
+gemma update --check    # is there an update? install nothing
+gemma update --full     # also re-check Ollama, the model and web search
 ```
 
 ---
@@ -66,7 +72,7 @@ powershell -ExecutionPolicy Bypass -File .\install.ps1
 
 | PowerShell | bash | Does |
 |---|---|---|
-| `-Model gemma4:e4b` | `--model gemma4:e4b` | Smaller, faster model |
+| `-Model gemma4:e4b` | `--model gemma4:e4b` | Edge model — fits an 8 GB GPU fully (bigger download, 9 GB) |
 | `-SkipModel` | `--skip-model` | Don't download the model |
 | `-SkipSearch` | `--skip-search` | Don't set up web search |
 | `-SkipUpdate` | `--skip-update` | Don't `git pull` first |
