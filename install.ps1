@@ -31,6 +31,35 @@ function Ok($m)    { Write-Host "  OK $m" -ForegroundColor Green }
 function Warn($m)  { Write-Host "  !! $m" -ForegroundColor Yellow }
 function Have($n)  { return [bool](Get-Command $n -ErrorAction SilentlyContinue) }
 
+function Invoke-Native {
+    # Run an external command without letting it abort the installer.
+    #
+    # PowerShell 5.1 wraps a native command's stderr in an ErrorRecord, which
+    # THROWS under $ErrorActionPreference = "Stop". So a merely chatty tool kills
+    # the install: git printing progress, or the Microsoft Store python.exe stub
+    # printing "Python was not found" - which is a perfectly normal answer to
+    # "is python here?", not a reason to give up.
+    #
+    # Returns @{ Output = <string>; Code = <int> }. Code -1 means it could not
+    # be launched at all. Judge results by Code, never by whether stderr spoke.
+    param([Parameter(Mandatory = $true)][string]$File, [string[]]$Arguments = @())
+    $prev = $ErrorActionPreference
+    $ErrorActionPreference = "Continue"
+    $out = ""
+    $code = -1
+    try {
+        $out = (& $File @Arguments 2>&1 | Out-String)
+        $code = $LASTEXITCODE
+        if ($null -eq $code) { $code = 0 }
+    } catch {
+        $out = $_.Exception.Message
+        $code = -1
+    } finally {
+        $ErrorActionPreference = $prev
+    }
+    return @{ Output = $out; Code = $code }
+}
+
 function Find-OllamaExe {
     # Prefer PATH; fall back to the known install location so a terminal opened
     # BEFORE Ollama was installed still finds it (and we never re-download).
@@ -44,8 +73,10 @@ function Find-OllamaExe {
 function Get-OllamaVersion($exe) {
     if (-not $exe) { return $null }
     try {
-        $line = (& $exe --version 2>&1 | Select-Object -First 1)
-        if ($line -match "(\d+\.\d+\.\d+)") { return [version]$Matches[1] }
+        # Chatty output here must not read as "no ollama" - that would send us
+        # into Install-Ollama and re-download a gigabyte for nothing.
+        $r = Invoke-Native -File $exe -Arguments @("--version")
+        if ($r.Output -match "(\d+\.\d+\.\d+)") { return [version]$Matches[1] }
     } catch {}
     return $null
 }
@@ -172,13 +203,18 @@ if ($SkipModel) {
 # 3. Python ---------------------------------------------------------------
 Info "Checking Python 3.10+"
 $py = $null
-foreach ($cand in @("python", "py")) {
-    if (Have $cand) {
-        $vraw = (& $cand --version 2>&1) | Out-String
-        if ($vraw -match "Python (\d+)\.(\d+)") {
-            $maj = [int]$Matches[1]; $min = [int]$Matches[2]
-            if ($maj -gt 3 -or ($maj -eq 3 -and $min -ge 10)) { $py = $cand; break }
-        }
+foreach ($cand in @("python", "py", "python3")) {
+    if (-not (Have $cand)) { continue }
+    # A "python" on PATH is often the Microsoft Store alias stub, which prints
+    # "Python was not found" to stderr and exits non-zero. That is an answer, not
+    # a failure - keep looking rather than dying.
+    $probe = Invoke-Native -File $cand -Arguments @("--version")
+    if ($probe.Output -match "Python (\d+)\.(\d+)") {
+        $maj = [int]$Matches[1]; $min = [int]$Matches[2]
+        if ($maj -gt 3 -or ($maj -eq 3 -and $min -ge 10)) { $py = $cand; break }
+        Warn "$cand is Python $maj.$min - too old, need 3.10+"
+    } elseif ($probe.Output -match "Microsoft Store|was not found") {
+        Warn "'$cand' on PATH is the Microsoft Store placeholder, not a real Python - ignoring it"
     }
 }
 if (-not $py) {
@@ -189,9 +225,28 @@ if (-not $py) {
     }
     if ($winget) {
         Info "Installing Python 3.12 via winget"
-        & $winget install -e --id Python.Python.3.12 --accept-source-agreements --accept-package-agreements
+        $wr = Invoke-Native -File $winget -Arguments @("install", "-e", "--id", "Python.Python.3.12",
+                                                       "--accept-source-agreements", "--accept-package-agreements")
+        foreach ($line in ($wr.Output -split "`r?`n")) {
+            if ($line.Trim()) { Write-Host "   $line" -ForegroundColor DarkGray }
+        }
         $env:Path = [System.Environment]::GetEnvironmentVariable("Path","Machine") + ";" + [System.Environment]::GetEnvironmentVariable("Path","User")
-        $py = "python"
+
+        # Do not assume it worked: a fresh install often is not visible to THIS
+        # process, and proceeding on a bad $py fails later with a confusing error.
+        foreach ($cand in @("python", "py", "python3")) {
+            if (-not (Have $cand)) { continue }
+            $probe = Invoke-Native -File $cand -Arguments @("--version")
+            if ($probe.Output -match "Python (\d+)\.(\d+)") {
+                $maj = [int]$Matches[1]; $min = [int]$Matches[2]
+                if ($maj -gt 3 -or ($maj -eq 3 -and $min -ge 10)) { $py = $cand; break }
+            }
+        }
+        if (-not $py) {
+            Warn "Python was installed but is not visible in this terminal yet."
+            Warn "Close this window, open a NEW PowerShell, and re-run this installer."
+            exit 1
+        }
     } else {
         Warn "Python 3.10+ not found and winget unavailable. Install from https://python.org then re-run."
         exit 1
@@ -204,7 +259,8 @@ Info "Installing the gemma CLI (pip install --upgrade .)"
 & $py -m pip install --upgrade pip | Out-Null
 & $py -m pip install --upgrade "$RepoDir"
 if (Have "gemma") {
-    Ok "gemma is on PATH ($(& gemma --version 2>&1))"
+    $gv = Invoke-Native -File "gemma" -Arguments @("--version")
+    Ok "gemma is on PATH ($($gv.Output.Trim()))"
 } else {
     $scripts = & $py -c "import sysconfig; print(sysconfig.get_path('scripts'))"
     Warn "gemma installed but its folder isn't on PATH: $scripts"
