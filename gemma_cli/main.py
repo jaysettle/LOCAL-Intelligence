@@ -59,8 +59,8 @@ def _preflight(cfg: Dict, console: Console) -> None:
         )
 
 
-def _run_once(cfg, messages, console, renderer, text, images=None, approver=None) -> None:
-    """One user turn in the plain REPL / one-shot path.
+def _render_turn(cfg, messages, console, renderer, events, approver=None) -> None:
+    """Render one turn's events in the plain REPL / one-shot path.
 
     Ctrl+C here stops the ANSWER, not the session. Without this, an interrupt
     mid-generation escaped as a KeyboardInterrupt traceback and took the whole
@@ -68,8 +68,6 @@ def _run_once(cfg, messages, console, renderer, text, images=None, approver=None
     bail out of a runaway answer is not optional.
     """
     from .statusline import StatusBar
-
-    events = run_turn(cfg, messages, text, image_paths=images, approver=approver)
 
     # Bottom status bar (folder / GPU / VRAM / CPU / model) while the model
     # works, the same one --live shows. Not with an approver: its y/N prompt
@@ -97,6 +95,49 @@ def _run_once(cfg, messages, console, renderer, text, images=None, approver=None
         console.print("\n[dim]· stopped (Ctrl+C) — session kept; Ctrl+C again at the prompt to exit[/dim]")
     finally:
         renderer.whole_lines = prev_whole
+
+
+def _run_once(cfg, messages, console, renderer, text, images=None, approver=None) -> None:
+    """One user turn in the plain REPL / one-shot path."""
+    events = run_turn(cfg, messages, text, image_paths=images, approver=approver)
+    _render_turn(cfg, messages, console, renderer, events, approver=approver)
+
+
+def _per_item_events(cfg, messages, job, approver=None, cancel=None):
+    """A per-file skill run as one event stream: N child runs, then a synthesis turn.
+
+    Control flow lives HERE, in Python — the model never decides to recurse. Each
+    file is processed in a fresh child context (see agent.run_child) and only its
+    result line reaches the parent, which then finishes the task in a normal turn
+    that is recorded in the session like any other.
+    """
+    from .agent import run_child
+
+    skill, items, extra = job["skill"], job["items"], job.get("extra", "")
+    readonly = bool(cfg.get("child_readonly", True)) and not skill.child_writes
+    notes = ("" if cfg.get("child_thinking", False) else ", thinking off") + (", read-only" if readonly else "")
+    yield ("notice", f"{skill.name}: {len(items)} file(s), each in its own context{notes}")
+
+    results = []
+    for i, path in enumerate(items, 1):
+        if cancel is not None and cancel.is_set():
+            yield ("notice", "stopped before all files were processed")
+            return
+        holder: Dict = {}
+        label = f"[{i}/{len(items)}] {path.name}"
+        for event in run_child(cfg, skill.render_item(path, extra), label=label,
+                               approver=approver, cancel=cancel, out=holder, readonly=readonly):
+            yield event
+        results.append((path.name, holder.get("result", "")))
+
+    for event in run_turn(cfg, messages, skill.render_synthesis(results, extra),
+                          approver=approver, cancel=cancel):
+        yield event
+
+
+def _run_per_item(cfg, messages, console, renderer, job, approver=None) -> None:
+    events = _per_item_events(cfg, messages, job, approver=approver)
+    _render_turn(cfg, messages, console, renderer, events, approver=approver)
 
 
 def _make_approver(console: Console):
@@ -173,7 +214,8 @@ _HELP = (
     "/skills — list saved skills and how often they're used\n"
     "/skill new <name> — turn what we just did into a reusable skill\n"
     "/skill edit|delete <name> — manage a skill\n"
-    "/<skill-name> [extra] — run a saved skill\n"
+    "/<skill-name> [extra] — run a saved skill (per-file skills run once per file)\n"
+    "/check — have the model review its last answer against the tool results\n"
     "/exit — quit    (while answering: Esc stops it, typing queues the next)[/dim]"
 )
 
@@ -390,6 +432,10 @@ def _handle_command(line, cfg, messages, console, session_path):
 
     if cmd == "/memory":
         return _handle_memory(parts, cfg, console)
+    if cmd == "/check":
+        from .review import check_last_turn
+        check_last_turn(cfg, messages, console)
+        return ("handled", None, None)
     if cmd == "/skills":
         _skill_report(console)
         return ("handled", None, None)
@@ -403,6 +449,20 @@ def _handle_command(line, cfg, messages, console, session_path):
     if skill is not None:
         extra = line.split(maxsplit=1)[1] if len(line.split(maxsplit=1)) > 1 else ""
         skills_mod.record_use(skill.name, source="command")
+        if skill.per_file:
+            limit = int(cfg.get("per_file_max_items", 12) or 12)
+            items, total = skills_mod.discover_items(skill, limit=limit)
+            if not items:
+                console.print(f"[yellow]{skill.name}: no files match {skill.globs or ['*']} in this folder[/yellow]")
+                return ("handled", None, None)
+            console.print(
+                f"[dim]running skill [/dim][bold]{skill.name}[/bold][dim] ({skill.scope}) "
+                f"per file: {len(items)} file(s), each in its own context[/dim]"
+            )
+            if total > len(items):
+                console.print(f"[yellow]· only the first {len(items)} of {total} matching files "
+                              f"(per_file_max_items); narrow the glob or raise the limit[/yellow]")
+            return ("per_item", {"skill": skill, "items": items, "extra": extra}, None)
         console.print(f"[dim]running skill [/dim][bold]{skill.name}[/bold][dim] ({skill.scope})[/dim]")
         return ("run", skill.render(extra), None)
 
@@ -441,6 +501,9 @@ def _repl_plain(cfg, messages, console, renderer, session_path, approver=None) -
                 return 0
             if action == "run":
                 _run_once(cfg, messages, console, renderer, ptext, images=imgs, approver=approver)
+                save_session(session_path, messages, cfg["model"])
+            elif action == "per_item":
+                _run_per_item(cfg, messages, console, renderer, ptext, approver=approver)
                 save_session(session_path, messages, cfg["model"])
             continue
         _run_once(cfg, messages, console, renderer, line, approver=approver)
@@ -523,6 +586,24 @@ def _consume_plain(events, show_thinking=True, width=100) -> str:
             flush()
             mode = None
             print(f"Error: {payload}", flush=True)
+        elif kind == "child":
+            ck, cp = payload
+            if ck == "tool_start":
+                flush()
+                mode = None
+                a = (cp or {}).get("args", {}) or {}
+                prev = a.get("path") or a.get("command") or a.get("pattern") or a.get("url") or a.get("query") or ""
+                print(f"    -> {cp.get('name', '')} {str(prev)[:70]}", flush=True)
+            elif ck == "error":
+                flush()
+                mode = None
+                print(f"    -> Error: {cp}", flush=True)
+        elif kind == "child_result":
+            flush()
+            mode = None
+            res = (payload.get("result") or "").strip()
+            first = res.splitlines()[0] if res else "(no result)"
+            print(f"  -> {payload.get('label', '')}: {first[:110]}", flush=True)
         elif kind == "done":
             flush()
             mode = None
@@ -563,7 +644,8 @@ def _repl_interactive(cfg, messages, console, renderer, session_path, approver=N
             item = work.get()
             if item is None:
                 return
-            text, images = item
+            per_item = item if isinstance(item, dict) else None
+            text, images = (None, None) if per_item else item
             cancel = threading.Event()
             state["cancel"] = cancel
             state["busy"] = True
@@ -577,7 +659,10 @@ def _repl_interactive(cfg, messages, console, renderer, session_path, approver=N
             st = threading.Thread(target=_sampler, daemon=True)
             st.start()
             try:
-                events = run_turn(cfg, messages, text, image_paths=images, approver=approver, cancel=cancel)
+                if per_item is not None:
+                    events = _per_item_events(cfg, messages, per_item, approver=approver, cancel=cancel)
+                else:
+                    events = run_turn(cfg, messages, text, image_paths=images, approver=approver, cancel=cancel)
                 _consume_plain(events, show_thinking=cfg.get("show_thinking", True))
             except Exception as e:
                 print(f"error: {e}", flush=True)
@@ -645,6 +730,10 @@ def _repl_interactive(cfg, messages, console, renderer, session_path, approver=N
                     break
                 if action == "run":
                     enqueue(ptext, imgs)
+                elif action == "per_item":
+                    if state["busy"]:
+                        print(f"queued ({work.qsize() + 1})", flush=True)
+                    work.put(ptext)
                 continue
             enqueue(line, None)
 
@@ -682,7 +771,8 @@ def main(argv: Optional[List[str]] = None) -> int:
     parser.add_argument("--model", help="Override the model (e.g. gemma4:12b, gemma4:e4b).")
     parser.add_argument("--num-ctx", type=int, help="Override context window size.")
     parser.add_argument("--searxng-url", help="Override the SearXNG base URL.")
-    parser.add_argument("--no-thinking", action="store_true", help="Hide the model's reasoning output.")
+    parser.add_argument("--no-thinking", action="store_true", help="Don't generate the model's reasoning at all — much faster on small GPUs; "
+                             "slightly weaker on hard tasks. (Config: thinking: false.)")
     parser.add_argument("--verbose", action="store_true", help="Show full tool results, not previews.")
     parser.add_argument("--setup-config", action="store_true", help="Write a default config.yaml and exit.")
     parser.add_argument("--resume", "--continue", dest="resume", action="store_true",
@@ -748,6 +838,7 @@ def main(argv: Optional[List[str]] = None) -> int:
     }
     if args.no_thinking:
         overrides["show_thinking"] = False
+        overrides["thinking"] = False  # don't generate it, don't just hide it
 
     cfg = load_config(overrides)
     apply_to_tools(cfg)

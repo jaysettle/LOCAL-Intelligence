@@ -1,5 +1,54 @@
 # Changelog
 
+## 0.7.0 — Recursion, the deterministic kind; and thinking you can actually turn off
+
+**The measurement that shaped this release.** Same trivial prompt, model warm, RTX 2070:
+`think: true` took **67.4 s** (202 characters of reasoning to say "ok"); `think: false` took
+**9.9 s**. Thinking was ~85% of a turn — and `--no-thinking` only *hid* it. It now disables it:
+`thinking: false` in config, `GEMMA_THINKING=0`, or `--no-thinking`. Only ever sent to Ollama when
+disabling, so models without a thinking mode are unaffected. Default stays on.
+
+**Child runs** (`agent.run_child`) — the primitive under every form of recursion here. A scoped
+subtask runs in a *fresh* context: its own system prompt, the task, no parent history, a smaller
+tool budget (`child_max_tool_iterations: 10`), thinking off (`child_thinking: false`), and a capped
+result (`child_result_chars: 2000`). Its events stream back tagged so the renderer shows them
+indented; its transcript is discarded and only the result line reaches the parent. There is one
+GPU, so a second context buys no speed — what it buys is **isolation**: twelve document reads in
+children leave the parent's 32K window holding twelve lines.
+
+**Per-file skills** — a skill with `mode: per-file` and a `glob:` runs once per matching file in a
+child, then a synthesis turn over the results. **The control flow is in Python.** The model never
+decides to recurse; a 12B would over-recurse exactly the way it over-triggers skills. Capped at
+`per_file_max_items: 12`, and it says so when it caps. Works in both REPLs. **Children are
+read-only** — no `write_file`/`edit_file`/`delete_file`/`shell`, withheld from their tool list
+rather than requested in a prompt. The first live run showed why: with a skill ending in "write
+everything to INDEX.md", child #1 wrote INDEX.md with its single line. Writing is the synthesis
+turn's job; `child_writes: true` in a skill's frontmatter opts back in.
+
+```markdown
+---
+name: doc-index
+description: One line per document, then INDEX.md
+mode: per-file
+glob: "*.pdf, *.docx, *.xlsx"
+---
+1. Read the file with read_document. 2. Reply with one line: what it is and the key facts.
+```
+
+**`/check`** — recursion as verification. A second call (thinking off, ~10 s) re-reads the last
+turn's tool results and the answer and reports unsupported claims, skipped steps and numbers that
+do not match. It never rewrites the answer, so a wrong review costs nothing.
+
+**Not built, deliberately:** a model-callable `delegate` tool. `CHILD_EXCLUDED_TOOLS` is where it
+goes the day it exists, which is what caps depth at 1 in code rather than in a prompt. Worth it on
+≥12 GB VRAM or a networked Ollama; marginal on 8 GB.
+
+**Verified live** on `gemma4:12b` (8 GB RTX 2070): a per-file skill over three documents ran three
+children and one synthesis turn, wrote INDEX.md once with every fact correct, and `/check` returned
+`supported / none`. 9½ minutes end to end, most of it the parent's thinking.
+
+**Tests** — 33 new (214 total).
+
 ## 0.6.0 — The status bar in the default REPL, and model text is never markup
 
 **Status bar everywhere.** `gemma go` (and one-shot `gemma -p`) now show the same bottom bar as
