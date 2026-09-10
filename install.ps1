@@ -74,9 +74,19 @@ if (-not $SkipUpdate) {
         Info "Updating code from git ($branch)"
         $scriptFile = Join-Path $RepoDir "install.ps1"
         $before = (Get-FileHash $scriptFile -ErrorAction SilentlyContinue).Hash
-        try {
-            git -C $RepoDir pull --ff-only 2>&1 | ForEach-Object { Write-Host "   $_" -ForegroundColor DarkGray }
-        } catch { Warn "git pull failed (continuing with local code)" }
+        # git writes ordinary progress to stderr, and PowerShell 5.1 turns a native
+        # command's stderr into an ErrorRecord that throws under $ErrorActionPreference
+        # = "Stop". That is what made a perfectly good pull report "git pull failed".
+        # Judge it by the exit code instead.
+        $prevEap = $ErrorActionPreference
+        $ErrorActionPreference = "Continue"
+        $pullOut = (& git -C $RepoDir pull --ff-only 2>&1 | Out-String)
+        $pullCode = $LASTEXITCODE
+        $ErrorActionPreference = $prevEap
+        foreach ($line in ($pullOut -split "`r?`n")) {
+            if ($line.Trim()) { Write-Host "   $line" -ForegroundColor DarkGray }
+        }
+        if ($pullCode -ne 0) { Warn "git pull failed (continuing with local code)" }
         $after = (Get-FileHash $scriptFile -ErrorAction SilentlyContinue).Hash
         if ($before -and $after -and ($before -ne $after)) {
             Info "Installer itself changed - re-running the updated version"
@@ -178,6 +188,8 @@ if (Have "gemma") {
 # 5. Default config -------------------------------------------------------
 Info "Writing default config (kept if it already exists)"
 & $py -m gemma_cli.main --setup-config
+# Record where the source lives so "gemma update" finds it from any folder.
+& $py -c "from gemma_cli.updater import remember_repo; from pathlib import Path; remember_repo(Path(r'$RepoDir'))"
 
 # 6. Web search (optional) ------------------------------------------------
 if ($SkipSearch) {
@@ -227,5 +239,5 @@ try {
 Write-Host ""
 Ok "Done. Start chatting with:  gemma go"
 Write-Host "     One-shot:  gemma `"list the files in my home folder`"" -ForegroundColor DarkGray
-Write-Host "     Update:    re-run this script anytime to pull the latest and reinstall" -ForegroundColor DarkGray
+Write-Host "     Update:    gemma update   (from any folder; or re-run this script)" -ForegroundColor DarkGray
 Write-Host "     Config:    $env:APPDATA\gemma-cli\config.yaml" -ForegroundColor DarkGray

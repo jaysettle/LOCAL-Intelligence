@@ -39,6 +39,12 @@ DEFAULTS: Dict[str, Any] = {
     "global_memory_file": None,  # None => <config_dir>/memory.md
     # Reliability
     "compact_at_ratio": 0.75,   # summarize old turns past this fraction of num_ctx
+    # Where the source checkout lives, for `gemma update`. Filled in automatically
+    # the first time an update runs.
+    "repo_dir": None,
+    # Skills: let the model load a saved skill on its own via the load_skill tool.
+    # Turn off if a small model over-triggers; /<name> still works either way.
+    "allow_model_skills": True,
     # Safety: none | writes | all  (which tool categories need y/n approval)
     "approve": "none",
     # Optional smaller model for internal utility calls (compaction, titles)
@@ -123,7 +129,8 @@ def write_default_config() -> Path:
 
 def apply_to_tools(cfg: Dict[str, Any]) -> None:
     """Push runtime config into the tool modules."""
-    from .tools import file_tools, web_tools, memory_tools
+    from .tools import file_tools, web_tools, memory_tools, skill_tools
     file_tools.set_allowed_write_roots([Path(p) for p in cfg["allowed_write_roots"]])
     web_tools.set_searxng_url(cfg["searxng_url"])
     memory_tools.configure(cfg.get("project_memory_file", "GEMMA.md"), cfg.get("global_memory_file", ""))
+    skill_tools.configure(cfg.get("allow_model_skills", True))

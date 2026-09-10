@@ -67,6 +67,16 @@ def read_file(inp: Dict[str, Any]) -> str:
     if os.path.isdir(path):
         return f"Error: Path is a directory, not a file: {path}"
 
+    # Binary document formats read as mojibake here — send the model to the tool
+    # that can actually parse them rather than letting it "read" garbage.
+    from .doc_tools import BINARY_DOC_EXTS
+    if path.lower().endswith(BINARY_DOC_EXTS):
+        ext = os.path.splitext(path)[1].lower()
+        return (
+            f"Error: {ext} is a document format that read_file cannot decode. "
+            f"Call read_document with path={path!r} instead — it extracts the text."
+        )
+
     try:
         with open(path, "r", encoding="utf-8", errors="replace") as f:
             lines = f.readlines()

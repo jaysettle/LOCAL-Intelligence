@@ -99,6 +99,8 @@ have gemma && ok "gemma is on PATH" || warn "gemma installed; ensure your pip sc
 # 5. Default config
 info "Writing default config"
 "$PY" -m gemma_cli.main --setup-config
+# Record where the source lives so `gemma update` can find it from any folder.
+"$PY" -c "from gemma_cli.updater import remember_repo; from pathlib import Path; remember_repo(Path(r'$REPO_DIR'))" 2>/dev/null || true
 
 # 6. Web search (optional)
 if [ "$SKIP_SEARCH" -eq 1 ]; then
