@@ -1,5 +1,31 @@
 # Changelog
 
+## 0.5.2 — The installer no longer dies on a chatty git
+
+Reported from a real install: the script aborted before doing anything, with
+
+```
+git : fatal: detected dubious ownership in repository at 'C:/Users/.../LOCAL-Intelligence'
+At install.ps1:73 char:20
+```
+
+`git ... 2>$null` looks harmless, but PowerShell 5.1 wraps a native command's stderr in an
+ErrorRecord, which **throws** under `$ErrorActionPreference = "Stop"`. So any git complaint —
+"dubious ownership" from a clone made by another account, or ordinary progress output — killed
+the whole install before Ollama, the model or the CLI were touched.
+
+Every git call in the self-update block is advisory now: run with the preference relaxed, judged
+by exit code, and nothing there can stop the install. Dubious ownership is detected specifically
+and answered with the command that fixes it:
+
+```
+git config --global --add safe.directory '<repo>'
+```
+
+Verified by reproducing the original failure: the old code throws, the new code warns and carries
+on. Also restores the pre-pull hash of `install.ps1`, without which the "installer updated itself,
+re-run it" path would have silently stopped working.
+
 ## 0.5.1 — Fixes found by running against a real model
 
 First run against live `gemma4:12b` on an 8 GB GPU (measured 35%/65% CPU/GPU spill). It found

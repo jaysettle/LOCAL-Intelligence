@@ -70,23 +70,49 @@ Write-Host "----------------------------" -ForegroundColor White
 # 0. Self-update from the repo's branch -----------------------------------
 if (-not $SkipUpdate) {
     if ((Have "git") -and (Test-Path (Join-Path $RepoDir ".git"))) {
-        $branch = (git -C $RepoDir rev-parse --abbrev-ref HEAD 2>$null)
-        Info "Updating code from git ($branch)"
+        # Every git call here is advisory: the self-update is a convenience, and
+        # nothing about it should be able to stop an install. PowerShell 5.1 wraps
+        # a native command's stderr in an ErrorRecord that THROWS under
+        # $ErrorActionPreference = "Stop", so a merely chatty git (progress on
+        # stderr, a "dubious ownership" complaint) used to abort the whole script
+        # before it installed anything. Run git with the preference relaxed and
+        # judge every call by its exit code.
+        # Hash the installer BEFORE the pull so we can tell if it updated itself.
         $scriptFile = Join-Path $RepoDir "install.ps1"
         $before = (Get-FileHash $scriptFile -ErrorAction SilentlyContinue).Hash
-        # git writes ordinary progress to stderr, and PowerShell 5.1 turns a native
-        # command's stderr into an ErrorRecord that throws under $ErrorActionPreference
-        # = "Stop". That is what made a perfectly good pull report "git pull failed".
-        # Judge it by the exit code instead.
+
         $prevEap = $ErrorActionPreference
         $ErrorActionPreference = "Continue"
-        $pullOut = (& git -C $RepoDir pull --ff-only 2>&1 | Out-String)
-        $pullCode = $LASTEXITCODE
-        $ErrorActionPreference = $prevEap
-        foreach ($line in ($pullOut -split "`r?`n")) {
-            if ($line.Trim()) { Write-Host "   $line" -ForegroundColor DarkGray }
+
+        $branch = (& git -C $RepoDir rev-parse --abbrev-ref HEAD 2>&1 | Out-String).Trim()
+        $branchCode = $LASTEXITCODE
+
+        $pullOut = ""
+        $pullCode = 0
+        if ($branchCode -eq 0) {
+            $pullOut = (& git -C $RepoDir pull --ff-only 2>&1 | Out-String)
+            $pullCode = $LASTEXITCODE
         }
-        if ($pullCode -ne 0) { Warn "git pull failed (continuing with local code)" }
+        $ErrorActionPreference = $prevEap
+
+        $gitSaid = "$branch`n$pullOut"
+        if ($gitSaid -match "dubious ownership") {
+            Warn "git will not use this folder: it reports 'dubious ownership'."
+            Warn "That happens when the clone was made by a different account (often an elevated shell)."
+            Warn "Fix it with:"
+            Warn "    git config --global --add safe.directory '$RepoDir'"
+            Warn "Continuing without the self-update - the install itself is unaffected."
+        } elseif ($branchCode -ne 0) {
+            Warn "Could not read the git branch - skipping the self-update."
+        } else {
+            Info "Updating code from git ($branch)"
+            foreach ($line in ($pullOut -split "`r?`n")) {
+                if ($line.Trim()) { Write-Host "   $line" -ForegroundColor DarkGray }
+            }
+            if ($pullCode -ne 0) { Warn "git pull failed (continuing with local code)" }
+        }
+
+        $scriptFile = Join-Path $RepoDir "install.ps1"
         $after = (Get-FileHash $scriptFile -ErrorAction SilentlyContinue).Hash
         if ($before -and $after -and ($before -ne $after)) {
             Info "Installer itself changed - re-running the updated version"
