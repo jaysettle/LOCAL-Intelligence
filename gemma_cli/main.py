@@ -60,8 +60,26 @@ def _preflight(cfg: Dict, console: Console) -> None:
 
 
 def _run_once(cfg, messages, console, renderer, text, images=None, approver=None) -> None:
+    """One user turn in the plain REPL / one-shot path.
+
+    Ctrl+C here stops the ANSWER, not the session. Without this, an interrupt
+    mid-generation escaped as a KeyboardInterrupt traceback and took the whole
+    conversation with it — and on a box where a turn is minutes long, a way to
+    bail out of a runaway answer is not optional.
+    """
     events = run_turn(cfg, messages, text, image_paths=images, approver=approver)
-    renderer.consume(events)
+    try:
+        renderer.consume(events)
+    except KeyboardInterrupt:
+        try:
+            events.close()  # closes the HTTP stream via the generator's finally/GC
+        except Exception:
+            pass
+        # Keep the transcript well-formed: the user message must not be left
+        # dangling without an assistant turn, or the next request is malformed.
+        if messages and messages[-1].get("role") == "user":
+            messages.append({"role": "assistant", "content": "(stopped by the user before finishing)"})
+        console.print("\n[dim]· stopped (Ctrl+C) — session kept; Ctrl+C again at the prompt to exit[/dim]")
 
 
 def _make_approver(console: Console):
@@ -416,28 +434,62 @@ def _repl_plain(cfg, messages, console, renderer, session_path, approver=None) -
 # Interactive REPL (live input, type-ahead queue, Esc-cancel, status line)
 # ---------------------------------------------------------------------------
 
-def _consume_plain(events, show_thinking=True) -> str:
+def _consume_plain(events, show_thinking=True, width=100) -> str:
     """Render an event stream with plain print() — reliable under patch_stdout
-    and from a background thread, where rich's output gets swallowed."""
+    and from a background thread, where rich's output gets swallowed.
+
+    Only WHOLE lines are ever printed. prompt_toolkit's patch_stdout renders a
+    complete line cleanly above the prompt, but a flushed PARTIAL line is written
+    on the prompt's own row and redrawn on every refresh — so streaming tokens
+    with end="" left the answer's last few words stuck bottom-left while a blank
+    area grew above them. Streamed text is therefore buffered and emitted at
+    newlines, or soft-wrapped at the last space once it passes `width`.
+    """
     mode = None
     answer = []
+    buf = ""
+
+    def flush() -> None:
+        nonlocal buf
+        if buf:
+            print(buf, flush=True)
+            buf = ""
+
+    def push(text: str) -> None:
+        nonlocal buf
+        buf += text
+        while True:
+            nl = buf.find("\n")
+            if nl != -1:
+                print(buf[:nl], flush=True)
+                buf = buf[nl + 1:]
+                continue
+            if len(buf) >= width:
+                cut = buf.rfind(" ", 0, width)
+                if cut <= 0:
+                    cut = width
+                print(buf[:cut], flush=True)
+                buf = buf[cut:].lstrip(" ")
+                continue
+            break
+
     for kind, payload in events:
         if kind == "think":
             if not show_thinking:
                 continue
             if mode != "think":
-                print("\nthinking: ", end="", flush=True)
+                flush()
+                print("thinking:", flush=True)
                 mode = "think"
-            print(payload, end="", flush=True)
+            push(payload)
         elif kind == "text":
-            if mode is not None and mode != "text":
-                print(flush=True)
+            if mode != "text":
+                flush()
             mode = "text"
             answer.append(payload)
-            print(payload, end="", flush=True)
+            push(payload)
         elif kind == "tool_start":
-            if mode is not None:
-                print(flush=True)
+            flush()
             mode = None
             a = payload.get("args", {}) or {}
             prev = a.get("path") or a.get("command") or a.get("pattern") or a.get("url") or a.get("query") or ""
@@ -447,19 +499,17 @@ def _consume_plain(events, show_thinking=True) -> str:
             first = r.strip().splitlines()[0] if r.strip() else "(no output)"
             print(f"  {first[:120]}", flush=True)
         elif kind == "notice":
-            if mode is not None:
-                print(flush=True)
+            flush()
             mode = None
             print(f"- {payload}", flush=True)
         elif kind == "error":
-            if mode is not None:
-                print(flush=True)
+            flush()
             mode = None
             print(f"Error: {payload}", flush=True)
         elif kind == "done":
-            if mode is not None:
-                print(flush=True)
+            flush()
             mode = None
+    flush()
     return "".join(answer)
 
 
