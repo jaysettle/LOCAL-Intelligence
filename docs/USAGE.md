@@ -56,6 +56,22 @@ close every one and re-run.
 `/paste` · `/image <path> <prompt>` · `/clear` · `/model <tag>` · `/save` · `/resume [name]` ·
 `/sessions` · `/memory [global]` · `/skills` · `/skill new <name>` · `/<skill-name>` · `/help` · `/exit`
 
+### Status bar
+
+While the model works, a bar at the bottom shows the working folder, GPU %, VRAM used/total, CPU %
+and the model. It goes away when the turn ends. On an 8 GB card it's how you see the CPU spill
+happening in real time.
+
+```yaml
+status_line: true                                # off: no bar, tokens stream one by one
+status_segments: [folder, gpu, vram, cpu, model] # pick and reorder
+status_refresh: 0.5                              # seconds between samples
+```
+
+GPU numbers need `nvidia-smi`; without it the bar shows `GPU n/a`. While the bar is up, output
+arrives line by line rather than token by token — a bottom-anchored bar can only render whole
+lines above it. The bar is not shown with `--approve` (its y/N prompt needs the terminal).
+
 ### Live REPL (opt-in)
 
 `gemma go --live` keeps the input live while the model answers:

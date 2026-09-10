@@ -1,5 +1,33 @@
 # Changelog
 
+## 0.6.0 — The status bar in the default REPL, and model text is never markup
+
+**Status bar everywhere.** `gemma go` (and one-shot `gemma -p`) now show the same bottom bar as
+`--live` while the model works: folder, GPU %, VRAM used/total, CPU %, model. It disappears when
+the turn ends. `--live` gets its bar from prompt_toolkit's toolbar, which only exists while a prompt
+is active; the plain REPL has no prompt during generation — exactly when the numbers matter — so it
+uses a rich `Live` anchored at the bottom and everything scrolls above it. Same config keys:
+`status_line`, `status_segments`, `status_refresh`. Not shown with `--approve` (its y/N prompt
+cannot share the terminal with a Live) or when stdout is not a terminal.
+
+**Whole lines under the bar.** The 0.5.5 lesson generalises: a bottom-anchored widget plus flushed
+partial lines is what collapsed the `--live` output into the prompt row. So while the bar is up the
+Renderer buffers streamed text and prints whole lines (`LineBuffer`, shared with the live REPL).
+Output arrives line by line rather than token by token during a turn. `status_line: false` restores
+token streaming without the bar.
+
+**Model text is not markup.** Found in a pasted transcript: the model's thinking showed
+`C:[/dim]Users[/dim]jsettle`. Rich reads `[...]` as markup, and a token ending in a backslash
+escapes the tag after it — each thinking token was wrapped in `[dim]…[/dim]`, so `C:\` + `[/dim]`
+became a literal `[/dim]` and the backslash vanished. Streamed model text now prints with markup
+off; tool names, argument previews and results are escaped before being placed in our own markup.
+A `[DIR]` in a directory listing or `[bold]` in an answer prints literally.
+
+**Tests** — 20 new (181 total), including the regression for the backslash bug in both render modes,
+and one for a hazard the live run exposed: `main.py` forces a "terminal" console whenever *stdin* is
+a tty, so `gemma -p "..." > report.txt` would have written every bar frame into the file. The bar
+now also requires stdout itself to be a tty.
+
 ## 0.5.5 — Live REPL output no longer collapses into the prompt row; Ctrl+C stops the answer
 
 **Live REPL (`--live`).** Observed on a real Windows terminal: the answer streamed into a one- or
