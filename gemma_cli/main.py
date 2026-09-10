@@ -67,9 +67,24 @@ def _run_once(cfg, messages, console, renderer, text, images=None, approver=None
     conversation with it — and on a box where a turn is minutes long, a way to
     bail out of a runaway answer is not optional.
     """
+    from .statusline import StatusBar
+
     events = run_turn(cfg, messages, text, image_paths=images, approver=approver)
+
+    # Bottom status bar (folder / GPU / VRAM / CPU / model) while the model
+    # works, the same one --live shows. Not with an approver: its y/N prompt
+    # cannot share the terminal with a rich Live. StatusBar is a no-op when
+    # stdout is not a terminal or status_line is off in config.
+    bar = StatusBar(console, cfg) if approver is None else None
+    use_bar = bar is not None and bar.enabled
+    prev_whole = renderer.whole_lines
     try:
-        renderer.consume(events)
+        if use_bar:
+            renderer.whole_lines = True  # a Live must only ever see whole lines above it
+            with bar:
+                renderer.consume(events)
+        else:
+            renderer.consume(events)
     except KeyboardInterrupt:
         try:
             events.close()  # closes the HTTP stream via the generator's finally/GC
@@ -80,6 +95,8 @@ def _run_once(cfg, messages, console, renderer, text, images=None, approver=None
         if messages and messages[-1].get("role") == "user":
             messages.append({"role": "assistant", "content": "(stopped by the user before finishing)"})
         console.print("\n[dim]· stopped (Ctrl+C) — session kept; Ctrl+C again at the prompt to exit[/dim]")
+    finally:
+        renderer.whole_lines = prev_whole
 
 
 def _make_approver(console: Console):

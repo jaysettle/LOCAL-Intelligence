@@ -28,11 +28,11 @@ The installed command is **`gemma`**. Primary entry: `gemma go` (interactive cha
 | `gemma_cli/agent.py` | `run_turn()` — the streaming tool loop; also the reliability harness (compaction, malformed-tool-call rescue, loop detection, empty-turn nudge) and cooperative `cancel` |
 | `gemma_cli/config.py` | Layered config: defaults → `config.yaml` → env (`GEMMA_*`) → CLI flags; pushes runtime settings into tool modules via `apply_to_tools()` |
 | `gemma_cli/sysprompt.py` | Builds the system prompt, templated from the host (user, host, OS, cwd + listing, date/time, memory, skill index) |
-| `gemma_cli/render.py` | `Renderer` — rich-based output for the one-shot / plain paths |
+| `gemma_cli/render.py` | `Renderer` — rich-based output for the one-shot / plain paths; `whole_lines=True` while a `StatusBar` is up. Prints model text with `markup=False` and escapes tool-derived text: rich reads `[...]` as markup and a token ending in `\` escapes the next tag, which turned `C:\Users\...` into `C:[/dim]Users[/dim]...`. `LineBuffer` — whole-line buffering shared with the live REPL |
 | `gemma_cli/sessions.py` | Save/restore conversations under `.gemma/sessions/` (per project) |
 | `gemma_cli/updater.py` | `gemma update` — locate the checkout, git pull, reinstall (deferred on Windows) |
 | `gemma_cli/skills.py` | Skill discovery, frontmatter parsing, the system-prompt index, capture-from-transcript, usage reporting |
-| `gemma_cli/statusline.py` | GPU/CPU/VRAM sampling (nvidia-smi + psutil) + toolbar string for the live REPL |
+| `gemma_cli/statusline.py` | GPU/CPU/VRAM sampling (nvidia-smi + psutil); `render()` builds the bar text for both REPLs; `StatusBar` is the rich-`Live` bottom bar used by the plain REPL and one-shot path (the `--live` REPL uses prompt_toolkit's toolbar instead). Anything printed while a `StatusBar` is up must be whole lines — see `render.LineBuffer` |
 | `gemma_cli/clipboard.py` | Grab an image off the clipboard (Pillow `ImageGrab`) for `/paste` and Alt+V |
 | `gemma_cli/tools/` | `definitions.py` (schemas), `executor.py` (dispatch), `file_tools.py`, `doc_tools.py`, `shell_tools.py`, `web_tools.py`, `memory_tools.py`, `plan_tools.py`, `skill_tools.py` |
 | `install.ps1` / `install.sh` | Idempotent, self-updating installers (Windows / POSIX) |

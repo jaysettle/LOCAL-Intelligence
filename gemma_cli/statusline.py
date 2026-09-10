@@ -81,3 +81,98 @@ def render(segments: List[str], smp: Optional[Sample], model: str, cwd: str, sam
     if not sampling:
         parts.append("idle")
     return "   ".join(p for p in parts if p)
+
+
+def _stdout_is_tty() -> bool:
+    """Is stdout really a terminal? (Module-level so tests can monkeypatch it.)"""
+    import sys
+    try:
+        return bool(sys.stdout.isatty())
+    except Exception:
+        return False
+
+
+class StatusBar:
+    """Bottom status line for the plain REPL and one-shot runs.
+
+    The --live REPL gets its bar from prompt_toolkit's bottom_toolbar, which
+    only exists while a prompt is active. The plain REPL has no prompt while the
+    model is generating — precisely when the numbers are interesting — so this
+    uses a rich Live anchored at the bottom instead: everything the Renderer
+    prints scrolls above it. Sampling runs on a background thread only while the
+    bar is up, so nothing polls at rest.
+
+    Contract: whoever prints while this is active must print WHOLE lines
+    (Renderer(whole_lines=True)). A flushed partial line lands on the bar's row.
+
+    Use as a context manager. Does nothing when the console is not a terminal or
+    `status_line` is off, so callers can always wrap unconditionally.
+    """
+
+    def __init__(self, console, cfg):
+        self.console = console
+        self.segments = list(cfg.get("status_segments") or ["folder", "gpu", "vram", "cpu", "model"])
+        self.model = str(cfg.get("model", ""))
+        self.refresh = float(cfg.get("status_refresh", 0.5) or 0.5)
+        # console.is_terminal is not enough: main.py forces it whenever STDIN is a
+        # tty, so `gemma -p "..." > report.txt` still has a "terminal" console —
+        # and every refresh frame would land in the file. Require a real stdout.
+        self.enabled = (
+            bool(cfg.get("status_line", True))
+            and bool(getattr(console, "is_terminal", False))
+            and _stdout_is_tty()
+        )
+        self._live = None
+        self._stop = None
+        self._thread = None
+        self._sample: Optional[Sample] = None
+
+    def _renderable(self):
+        from rich.text import Text
+        try:
+            line = render(self.segments, self._sample, self.model, os.getcwd(), sampling=True)
+        except Exception:
+            line = ""
+        return Text(line, style="reverse")
+
+    def __enter__(self):
+        if not self.enabled:
+            return self
+        import threading
+        from rich.live import Live
+
+        self._stop = threading.Event()
+        self._sample = sample()
+        self._live = Live(
+            self._renderable(),
+            console=self.console,
+            transient=True,                       # the bar disappears when the turn ends
+            refresh_per_second=max(1.0, 1.0 / self.refresh),
+        )
+        self._live.start()
+
+        def loop():
+            while not self._stop.wait(self.refresh):
+                self._sample = sample()
+                try:
+                    self._live.update(self._renderable())
+                except Exception:
+                    pass
+
+        self._thread = threading.Thread(target=loop, daemon=True)
+        self._thread.start()
+        return self
+
+    def __exit__(self, exc_type, exc, tb):
+        if self._stop is not None:
+            self._stop.set()
+        if self._thread is not None:
+            self._thread.join(timeout=2)
+        if self._live is not None:
+            try:
+                self._live.stop()
+            except Exception:
+                pass
+        self._live = None
+        self._thread = None
+        return False
