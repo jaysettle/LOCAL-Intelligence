@@ -1,5 +1,25 @@
 # Changelog
 
+## 0.5.5 — Live REPL output no longer collapses into the prompt row; Ctrl+C stops the answer
+
+**Live REPL (`--live`).** Observed on a real Windows terminal: the answer streamed into a one- or
+two-word fragment stuck bottom-left, next to the prompt, while blank space grew above it. The
+cause was precise: `_consume_plain` printed every streamed token with `end=""` and `flush=True`.
+prompt_toolkit's `patch_stdout` renders a *complete* line cleanly above the prompt, but a flushed
+*partial* line is written on the prompt's own row and redrawn on every refresh — once per token.
+Streamed text is now buffered and only whole lines are printed: at newlines, or soft-wrapped at
+the last space once a line passes 100 characters. Output arrives line by line instead of token
+by token, which is the price of it rendering at all under `patch_stdout`.
+
+**Plain REPL (default).** Ctrl+C mid-answer used to escape as a `KeyboardInterrupt` traceback and
+kill the whole session. It now stops the current answer, keeps the conversation, and leaves the
+transcript well-formed (a stopped turn gets a placeholder assistant message, so the next request
+is not two user turns in a row). A turn is minutes long on an 8 GB box; a way out that does not
+cost the session is not optional.
+
+**Tests** — 10 new, including one asserting the invariant behind the fix: `print` is never called
+with `end=""` in the live renderer.
+
 ## 0.5.4 — No external command can abort the installer
 
 Second report of the same bug class, from a machine with no real Python:
