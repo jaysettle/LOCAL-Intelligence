@@ -189,11 +189,44 @@ def git_pull(repo: Path) -> Tuple[bool, str]:
 # ---------------------------------------------------------------------------
 
 def launcher_path() -> Optional[Path]:
-    """The gemma.exe shim pip would have to overwrite, if there is one."""
+    """The gemma.exe shim pip would have to overwrite, if there is one.
+
+    Looking only next to sys.executable is wrong, and it quietly disables the
+    whole deferred-install path. It happens to work in a venv, where python.exe
+    and gemma.exe share Scripts\\, but not for the common system-Python layout:
+    with Python under Program Files, pip falls back to a per-user install and the
+    shim lands in %APPDATA%\\Python\\PythonXY\\Scripts instead. So ask PATH first —
+    that is the shim the user actually invoked — then the interpreter's own
+    script directories, per-user scheme included.
+    """
     if not _IS_WINDOWS:
         return None
-    exe = Path(sys.executable).parent / "gemma.exe"
-    return exe if exe.exists() else None
+
+    candidates: List[Path] = []
+    found = shutil.which("gemma")
+    if found:
+        candidates.append(Path(found))
+
+    import sysconfig
+    for scheme in (None, "nt_user"):
+        try:
+            scripts = sysconfig.get_path("scripts") if scheme is None else sysconfig.get_path("scripts", scheme)
+        except Exception:
+            scripts = None
+        if scripts:
+            candidates.append(Path(scripts) / "gemma.exe")
+
+    here = Path(sys.executable).parent
+    candidates.append(here / "gemma.exe")
+    candidates.append(here / "Scripts" / "gemma.exe")
+
+    for candidate in candidates:
+        try:
+            if candidate.suffix.lower() == ".exe" and candidate.is_file():
+                return candidate
+        except Exception:
+            continue
+    return None
 
 
 def _launcher_is_locked() -> bool:

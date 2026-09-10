@@ -1,5 +1,21 @@
 # Changelog
 
+## 0.5.3 — Find gemma.exe where pip actually put it
+
+`gemma update` was taking the inline install path on a real machine where it should have deferred.
+`launcher_path()` looked for `gemma.exe` beside `sys.executable`, which is true in a venv — python.exe
+and gemma.exe share `Scripts\` — and false for the common system-Python layout: with Python under
+`C:\Program Files`, pip falls back to a per-user install and the shim lands in
+`%APPDATA%\Python\PythonXY\Scripts`. Finding nothing, it concluded "not locked" and reinstalled in
+place, which is exactly the situation the deferred path exists to avoid.
+
+It happened to succeed, because pip renames a running executable aside rather than failing outright.
+That is luck, not correctness — the leftover it can strand is the same `~`-prefixed wreckage that
+jams later installs.
+
+PATH is now consulted first (that is the shim the user actually invoked), then the interpreter's own
+script directories including the per-user scheme, then the venv-style locations.
+
 ## 0.5.2 — The installer no longer dies on a chatty git
 
 Reported from a real install: the script aborted before doing anything, with
