@@ -367,3 +367,61 @@ def test_update_is_not_treated_as_a_prompt(monkeypatch):
     monkeypatch.setattr("gemma_cli.updater.update", lambda *a, **k: 0)
     monkeypatch.setattr(main_mod, "_run_once", lambda *a, **k: pytest.fail("ran as a prompt"))
     assert main_mod.main(["update"]) == 0
+
+
+# --- launcher discovery (a per-user install puts the shim elsewhere) ------
+
+def test_launcher_found_via_path(tmp_path, monkeypatch):
+    """PATH is asked first: that is the shim the user actually invoked."""
+    exe = tmp_path / "onpath" / "gemma.exe"
+    exe.parent.mkdir(parents=True)
+    exe.write_bytes(b"MZ")
+    monkeypatch.setattr(updater, "_IS_WINDOWS", True)
+    monkeypatch.setattr(updater.shutil, "which", lambda n: str(exe) if n == "gemma" else None)
+    assert updater.launcher_path() == exe
+
+
+def test_launcher_found_in_per_user_scripts(tmp_path, monkeypatch):
+    """The real-world case this missed: system Python under Program Files, so pip
+    does a per-user install and gemma.exe is NOT next to python.exe. Looking only
+    beside sys.executable silently disabled the deferred-install path."""
+    import sysconfig
+
+    user_scripts = tmp_path / "approaming" / "Scripts"
+    user_scripts.mkdir(parents=True)
+    (user_scripts / "gemma.exe").write_bytes(b"MZ")
+
+    program_files = tmp_path / "ProgramFiles" / "Python311"
+    program_files.mkdir(parents=True)
+    (program_files / "python.exe").write_bytes(b"MZ")   # no gemma.exe beside it
+
+    monkeypatch.setattr(updater, "_IS_WINDOWS", True)
+    monkeypatch.setattr(updater.shutil, "which", lambda n: None)
+    monkeypatch.setattr(updater.sys, "executable", str(program_files / "python.exe"))
+
+    real_get_path = sysconfig.get_path
+
+    def fake_get_path(name, *a, **k):
+        if name == "scripts":
+            if a and a[0] == "nt_user":
+                return str(user_scripts)
+            return str(program_files / "Scripts")   # exists in name only
+        return real_get_path(name, *a, **k)
+
+    monkeypatch.setattr(sysconfig, "get_path", fake_get_path)
+    assert updater.launcher_path() == user_scripts / "gemma.exe"
+
+
+def test_launcher_none_when_nothing_installed(tmp_path, monkeypatch):
+    import sysconfig
+
+    monkeypatch.setattr(updater, "_IS_WINDOWS", True)
+    monkeypatch.setattr(updater.shutil, "which", lambda n: None)
+    monkeypatch.setattr(updater.sys, "executable", str(tmp_path / "python.exe"))
+    monkeypatch.setattr(sysconfig, "get_path", lambda name, *a, **k: str(tmp_path / "nope"))
+    assert updater.launcher_path() is None
+
+
+def test_launcher_none_off_windows(monkeypatch):
+    monkeypatch.setattr(updater, "_IS_WINDOWS", False)
+    assert updater.launcher_path() is None
