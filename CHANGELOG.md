@@ -1,5 +1,36 @@
 # Changelog
 
+## 0.5.4 — No external command can abort the installer
+
+Second report of the same bug class, from a machine with no real Python:
+
+```
+python.exe : Python was not found; run without arguments to install from the Microsoft Store...
+At install.ps1:177 char:18
++         $vraw = (& $cand --version 2>&1) | Out-String
+```
+
+0.5.2 fixed this for git and stopped there. It is not a git problem — it is every external command
+in the script. PowerShell 5.1 wraps a native command's stderr in an ErrorRecord that **throws**
+under `$ErrorActionPreference = "Stop"`, so any chatty tool kills the install. Here the `python`
+on PATH was the Microsoft Store alias stub, whose "Python was not found" is a perfectly good
+*answer* to "is python here?" — and the installer died on it, never reaching the step that would
+have installed real Python.
+
+- New `Invoke-Native` helper runs an external command with the preference relaxed and returns
+  `@{ Output; Code }`. Every probe in the script goes through it. Judge by `Code`, never by
+  whether stderr spoke.
+- Python detection recognises the Store placeholder by name and keeps looking, also trying
+  `python3`, and reports a too-old Python instead of silently skipping it.
+- After a winget install it **re-probes** rather than assuming `python` now works. A fresh install
+  is often invisible to the current process; it now says to open a new terminal instead of failing
+  later with a confusing pip error.
+- `Get-OllamaVersion` goes through the helper too: chatty output there previously read as "no
+  ollama", which would re-download a gigabyte for nothing.
+
+Verified by reproducing the reported failure: the old line throws with the exact message from the
+report, the new one recognises the placeholder and continues.
+
 ## 0.5.3 — Find gemma.exe where pip actually put it
 
 `gemma update` was taking the inline install path on a real machine where it should have deferred.
