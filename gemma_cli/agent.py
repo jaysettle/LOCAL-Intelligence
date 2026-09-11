@@ -391,10 +391,13 @@ def run_child(
     prompt = f"{context.strip()}\n\n{task.strip()}" if context.strip() else task.strip()
 
     final: List[str] = []
+    calls = 0
     for kind, payload in run_turn(child_cfg, messages, prompt, approver=approver, cancel=cancel,
                                   tools=tools, max_iters=iters):
         if kind == "text":
             final.append(payload)
+        elif kind == "tool_start":
+            calls += 1
         yield ("child", (kind, payload))
 
     result = "".join(final).strip()
@@ -402,4 +405,7 @@ def run_child(
         result = result[:cap].rstrip() + " …(truncated)"
     if out is not None:
         out["result"] = result
-    yield ("child_result", {"label": label, "result": result})
+        out["calls"] = calls
+    # `calls` makes a multi-read visible: a long PDF legitimately takes several
+    # read_document pages, and a reader should be able to tell that from a loop.
+    yield ("child_result", {"label": label, "result": result, "calls": calls})

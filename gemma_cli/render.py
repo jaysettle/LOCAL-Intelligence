@@ -175,6 +175,11 @@ class Renderer:
                 elif ck == "error":
                     close_stream()
                     self.console.print(f"    [dim]↳[/dim] [red]Error:[/red] {escape(str(cp))}")
+                elif ck == "notice":
+                    # Loop detection, compaction, "stopped" - a child's harness
+                    # events were invisible before; a loop looked like paging.
+                    close_stream()
+                    self.console.print(f"    [dim]↳ · {escape(str(cp))}[/dim]")
                 elif ck == "text" and self.verbose:
                     stream(str(cp), "dim")
 
@@ -183,7 +188,9 @@ class Renderer:
                 res = (payload.get("result") or "").strip()
                 first = res.splitlines()[0] if res else "(no result)"
                 label = escape(str(payload.get("label", "")))
-                self.console.print(f"  [dim]↳ {label}:[/dim] {escape(first[:110])}")
+                calls = payload.get("calls")
+                tail = f"  [dim]({calls} tool calls)[/dim]" if calls and calls > 1 else ""
+                self.console.print(f"  [dim]↳ {label}:[/dim] {escape(first[:110])}{tail}")
 
             elif kind == "done":
                 close_stream()

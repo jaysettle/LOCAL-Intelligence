@@ -1,5 +1,18 @@
 # Changelog
 
+## 0.7.2 — What the first 12-file run taught
+
+A per-file run over a real 175-document folder (12 processed, read-only children, one parent
+write, `/check` supported, 11 minutes) surfaced two readability gaps:
+
+- **Same-named files in different subfolders were indistinguishable.** Child labels and index rows
+  used the bare filename; two `…IntegrationV1.docx` files became two identical-looking rows. Labels
+  and results now use the path relative to the working folder.
+- **A multi-page read looked like a retry.** One PDF was `read_document`'d three times — correct
+  paging of a long file, but indistinguishable from a loop because a child's harness notices (loop
+  detection, compaction, "stopped") were never rendered. Child notices now show indented, and each
+  result line carries `(N tool calls)` when a child made more than one.
+
 ## 0.7.1 — A pasted prompt is one prompt
 
 Seen live in `gemma go`: a multi-line prompt pasted into the plain REPL ran as **one turn per

@@ -155,7 +155,7 @@ def test_child_runs_in_a_fresh_context_with_thinking_off(project, monkeypatch):
     kinds = [k for k, _ in events]
     assert kinds[0] == "child" and kinds[-1] == "child_result"
     assert holder["result"] == "Sensor units $4,200"
-    assert events[-1][1] == {"label": "[1/1] costs.xlsx", "result": "Sensor units $4,200"}
+    assert events[-1][1] == {"label": "[1/1] costs.xlsx", "result": "Sensor units $4,200", "calls": 0}
 
 
 def test_child_thinking_can_be_turned_on(project, monkeypatch):
@@ -352,6 +352,59 @@ def test_item_prompt_tells_the_child_to_skip_aggregate_steps(project):
     _write_skill(project, PER_FILE)
     s = skills.discover()["doc-lines"]
     assert "NOT yours" in s.render_item(project / "a.pdf")
+
+
+# --- labels, call counts, child notices (from the first 12-file live run) ----
+
+def test_labels_use_paths_relative_to_the_folder(project, monkeypatch):
+    """Two files with the same name in different subfolders must stay distinct."""
+    _write_skill(project, PER_FILE.replace('glob: "*.pdf, *.docx"', 'glob: "**/*.docx"'))
+    for sub in ("archive", "docs"):
+        (project / sub).mkdir()
+        (project / sub / "spec.docx").write_text("x")
+    s = skills.discover()["doc-lines"]
+    items, _ = skills.discover_items(s)
+    _fake_ollama(monkeypatch, [_text_reply("A"), _text_reply("B"), _text_reply("FINAL")])
+    messages = [{"role": "system", "content": "P"}]
+    events = list(main_mod._per_item_events(dict(BASE), messages, {"skill": s, "items": items, "extra": ""}))
+    labels = [p["label"] for k, p in events if k == "child_result"]
+    assert any("archive" in l and "spec.docx" in l for l in labels)
+    assert any("docs" in l and "spec.docx" in l for l in labels)
+    synthesis = messages[1]["content"]
+    assert "archive" in synthesis and "docs" in synthesis   # index rows distinguishable too
+
+
+def test_child_result_reports_tool_call_count(project, monkeypatch):
+    """A long PDF is legitimately read in several pages; the count makes that visible."""
+    _fake_ollama(monkeypatch, [_tool_call("read_document", {"path": "a.pdf"}),
+                               _tool_call("read_document", {"path": "a.pdf", "offset": 2}),
+                               _text_reply("summary")])
+    holder = {}
+    events = list(agent.run_child(dict(BASE), "x", out=holder))
+    assert holder["calls"] == 2
+    assert events[-1][1]["calls"] == 2
+
+
+def test_renderer_shows_child_notices_and_call_counts():
+    console = Console(file=io.StringIO(), width=100, no_color=True, color_system=None, highlight=False)
+    Renderer(console).consume(iter([
+        ("child", ("notice", "loop detected on read_document; nudging the model to change approach")),
+        ("child_result", {"label": "[1/1] a.pdf", "result": "summary", "calls": 3}),
+        ("done", None),
+    ]))
+    out = console.file.getvalue()
+    assert "loop detected on read_document" in out
+    assert "(3 tool calls)" in out
+
+
+def test_consume_plain_shows_child_notices_and_call_counts(capsys):
+    main_mod._consume_plain(iter([
+        ("child", ("notice", "compacted 6 earlier messages")),
+        ("child_result", {"label": "[1/1] a.pdf", "result": "summary", "calls": 3}),
+        ("done", None),
+    ]))
+    out = capsys.readouterr().out
+    assert "compacted 6 earlier messages" in out and "(3 tool calls)" in out
 
 
 # --- rendering child events -------------------------------------------------
