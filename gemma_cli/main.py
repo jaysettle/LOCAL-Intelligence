@@ -103,6 +103,15 @@ def _run_once(cfg, messages, console, renderer, text, images=None, approver=None
     _render_turn(cfg, messages, console, renderer, events, approver=approver)
 
 
+def _item_label(path) -> str:
+    """Path relative to the working folder, so two files with the same name in
+    different subfolders stay distinguishable in labels and in the index."""
+    try:
+        return str(Path(path).resolve().relative_to(Path.cwd().resolve()))
+    except (ValueError, OSError):
+        return Path(path).name
+
+
 def _per_item_events(cfg, messages, job, approver=None, cancel=None):
     """A per-file skill run as one event stream: N child runs, then a synthesis turn.
 
@@ -124,11 +133,12 @@ def _per_item_events(cfg, messages, job, approver=None, cancel=None):
             yield ("notice", "stopped before all files were processed")
             return
         holder: Dict = {}
-        label = f"[{i}/{len(items)}] {path.name}"
+        shown = _item_label(path)
+        label = f"[{i}/{len(items)}] {shown}"
         for event in run_child(cfg, skill.render_item(path, extra), label=label,
                                approver=approver, cancel=cancel, out=holder, readonly=readonly):
             yield event
-        results.append((path.name, holder.get("result", "")))
+        results.append((shown, holder.get("result", "")))
 
     for event in run_turn(cfg, messages, skill.render_synthesis(results, extra),
                           approver=approver, cancel=cancel):
@@ -650,12 +660,18 @@ def _consume_plain(events, show_thinking=True, width=100) -> str:
                 flush()
                 mode = None
                 print(f"    -> Error: {cp}", flush=True)
+            elif ck == "notice":
+                flush()
+                mode = None
+                print(f"    -> - {cp}", flush=True)
         elif kind == "child_result":
             flush()
             mode = None
             res = (payload.get("result") or "").strip()
             first = res.splitlines()[0] if res else "(no result)"
-            print(f"  -> {payload.get('label', '')}: {first[:110]}", flush=True)
+            calls = payload.get("calls")
+            tail = f"  ({calls} tool calls)" if calls and calls > 1 else ""
+            print(f"  -> {payload.get('label', '')}: {first[:110]}{tail}", flush=True)
         elif kind == "done":
             flush()
             mode = None
