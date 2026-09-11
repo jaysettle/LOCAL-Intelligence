@@ -209,9 +209,16 @@ def glob_files(inp: Dict[str, Any]) -> str:
     if not pattern:
         return "Error: 'pattern' is required"
 
+    # Accept "*.pdf, *.docx" as well as a single pattern: the model copies the
+    # comma form from per-file skill frontmatter, and a literal search for a
+    # pattern containing ", " finds nothing and teaches it nothing.
+    patterns = [p.strip() for p in pattern.split(",") if p.strip()] or [pattern]
     try:
-        full = os.path.join(base, pattern)
-        matches = glob_module.glob(full, recursive=True)
+        seen = {}
+        for pat in patterns:
+            for hit in glob_module.glob(os.path.join(base, pat), recursive=True):
+                seen[hit] = True
+        matches = list(seen)
         matches.sort(key=lambda x: os.path.getmtime(x) if os.path.exists(x) else 0, reverse=True)
     except Exception as e:
         return f"Error in glob: {e}"
