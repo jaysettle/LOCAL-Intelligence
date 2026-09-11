@@ -56,6 +56,11 @@ close every one and re-run.
 `/paste` · `/image <path> <prompt>` · `/clear` · `/model <tag>` · `/save` · `/resume [name]` ·
 `/sessions` · `/memory [global]` · `/skills` · `/skill new <name>` · `/<skill-name>` · `/check` · `/help` · `/exit`
 
+### Pasting
+
+Paste a multi-line prompt and it runs as **one** prompt — the REPL gathers the whole paste before
+sending. Commands stay one per line, so a pasted `/doc-index` followed by `/check` runs both.
+
 ### Status bar
 
 While the model works, a bar at the bottom shows the working folder, GPU %, VRAM used/total, CPU %

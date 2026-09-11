@@ -481,6 +481,52 @@ def _banner(cfg, console) -> None:
 # Plain REPL (non-interactive stdin, or when approval prompts are active)
 # ---------------------------------------------------------------------------
 
+def _pending_input_lines() -> List[str]:
+    """Lines already sitting in the console input buffer - i.e. the rest of a paste.
+
+    input() returns one line, so a pasted multi-line prompt used to run as one
+    prompt PER LINE: the first line alone ("its contents must be exactly this:")
+    sent a thinking model into a minutes-long spiral about the missing text, and
+    every other line then ran as its own turn. A paste lands in the buffer all
+    at once, so anything still readable immediately after input() returned is
+    the rest of it. Only ever used on a real terminal: with piped stdin the
+    line-by-line contract must hold (scripts and tests rely on it).
+    """
+    lines: List[str] = []
+    try:
+        if not sys.stdin.isatty():
+            return lines
+        if sys.platform == "win32":
+            import msvcrt
+            while msvcrt.kbhit():
+                lines.append(input())
+        else:
+            import select
+            while select.select([sys.stdin], [], [], 0.05)[0]:
+                nxt = sys.stdin.readline()
+                if not nxt:
+                    break
+                lines.append(nxt.rstrip("\r\n"))
+    except Exception:
+        pass
+    return lines
+
+
+def _read_prompt(console) -> str:
+    """One prompt from the plain REPL, joining a pasted block into one prompt.
+
+    Commands (/...) stay single-line so "/doc-index" pasted above "/check" runs
+    as two commands, not one command with junk arguments.
+    """
+    line = console.input("[bold green]>[/bold green] ").strip()
+    if not line or line.startswith("/"):
+        return line
+    rest = _pending_input_lines()
+    if rest:
+        line = "\n".join([line] + [r.rstrip() for r in rest]).strip()
+    return line
+
+
 def _repl_plain(cfg, messages, console, renderer, session_path, approver=None) -> int:
     _banner(cfg, console)
     console.print("[dim]Type your message. /help for commands, /exit to quit.[/dim]\n")
@@ -488,9 +534,15 @@ def _repl_plain(cfg, messages, console, renderer, session_path, approver=None) -
 
     while True:
         try:
-            line = console.input("[bold green]>[/bold green] ").strip()
+            line = _read_prompt(console)
         except (EOFError, KeyboardInterrupt):
-            console.print("\n[dim]bye[/dim]")
+            # A second Ctrl+C can land while rich is measuring the terminal for
+            # this very print; that used to escape as a traceback. Plain print
+            # cannot be interrupted in an interesting way.
+            try:
+                console.print("\n[dim]bye[/dim]")
+            except BaseException:
+                print("\nbye")
             return 0
         if not line:
             continue

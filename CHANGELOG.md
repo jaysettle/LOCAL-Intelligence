@@ -1,5 +1,20 @@
 # Changelog
 
+## 0.7.1 — A pasted prompt is one prompt
+
+Seen live in `gemma go`: a multi-line prompt pasted into the plain REPL ran as **one turn per
+line**. The first line alone ("…its contents must be exactly this:") sent a thinking model into a
+minutes-long spiral about the missing text, and every following line then ran as its own turn.
+
+- The plain REPL now drains whatever is already in the console input buffer right after `input()`
+  returns — a paste lands there all at once — and joins it into one prompt. Only on a real
+  terminal: piped stdin keeps the strict line-by-line contract. Commands (`/…`) stay single-line,
+  so `/doc-index` pasted above `/check` is still two commands.
+- A second Ctrl+C landing while rich printed "bye" escaped as a traceback. The goodbye can no longer
+  be interrupted into one.
+- The `glob` tool accepts `"*.pdf, *.docx"`: the model copies that form from per-file skill
+  frontmatter, and a literal search for a pattern containing a comma found nothing.
+
 ## 0.7.0 — Recursion, the deterministic kind; and thinking you can actually turn off
 
 **The measurement that shaped this release.** Same trivial prompt, model warm, RTX 2070:
