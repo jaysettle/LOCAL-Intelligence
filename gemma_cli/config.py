@@ -26,7 +26,10 @@ CONFIG_PATH = config_dir() / "config.yaml"
 DEFAULTS: Dict[str, Any] = {
     "model": "gemma4:12b",
     "num_ctx": 32768,
-    "ollama_url": "http://localhost:11434",
+    # 127.0.0.1, not localhost: on Windows "localhost" tries IPv6 (::1) first,
+    # Ollama listens on IPv4 only, and every new connection then waits ~2 s for
+    # the refusal before falling back (measured: 2.05 s vs 0.01 s per request).
+    "ollama_url": "http://127.0.0.1:11434",
     "searxng_url": "http://localhost:8899",
     "keep_alive": "30m",
     "max_tool_iterations": 25,
@@ -74,6 +77,21 @@ DEFAULTS: Dict[str, Any] = {
     # Experimental live REPL (type-ahead queue + Esc-cancel + live status line).
     # Off by default: the simple line-by-line reader is the reliable default.
     "live_repl": False,
+    # Fast typed decisions (see decide.py). decide_thinking: off | shadow | on.
+    # shadow asks "does this prompt need step-by-step reasoning?" before each turn
+    # and logs the answer with the turn's duration to .gemma/decisions.jsonl,
+    # changing nothing; on turns thinking off for prompts confidently judged
+    # simple (confidence >= decide_threshold). /decisions shows the log.
+    "decide_thinking": "off",
+    "decide_threshold": 0.8,
+    # gemma = the local model through Ollama (private, ~0.5 s per question).
+    # systemone = a server speaking TypeSafe's System One API, e.g. Jev at
+    # https://api.typesafe.ai - the prompt text then LEAVES THIS MACHINE.
+    "decide_backend": "gemma",
+    "decide_url": "https://api.typesafe.ai",
+    "decide_model": None,          # None: the chat model (gemma) or jev-latest (systemone)
+    "decide_api_key_env": "TYPESAFE_API_KEY",   # the key is read from this env var, never stored
+    "decide_timeout": 60,
 }
 
 def _as_bool(value: str) -> bool:
@@ -88,7 +106,23 @@ _ENV_MAP = {
     "GEMMA_KEEP_ALIVE": ("keep_alive", str),
     "GEMMA_MAX_TOOL_ITERATIONS": ("max_tool_iterations", int),
     "GEMMA_THINKING": ("thinking", _as_bool),
+    "GEMMA_DECIDE_THINKING": ("decide_thinking", str),
+    "GEMMA_DECIDE_BACKEND": ("decide_backend", str),
+    "GEMMA_DECIDE_URL": ("decide_url", str),
 }
+
+
+def _loopback_ipv4(url: str) -> str:
+    """http://localhost:11434 -> http://127.0.0.1:11434; anything else unchanged."""
+    from urllib.parse import urlsplit, urlunsplit
+
+    parts = urlsplit(url)
+    if (parts.hostname or "").lower() != "localhost":
+        return url
+    netloc = "127.0.0.1" + (f":{parts.port}" if parts.port else "")
+    if parts.username:
+        netloc = f"{parts.username}{':' + parts.password if parts.password else ''}@{netloc}"
+    return urlunsplit((parts.scheme, netloc, parts.path, parts.query, parts.fragment))
 
 
 def default_write_roots() -> List[str]:
@@ -119,6 +153,10 @@ def load_config(overrides: Dict[str, Any] | None = None) -> Dict[str, Any]:
     # Layer 3: explicit CLI overrides (only non-None)
     if overrides:
         cfg.update({k: v for k, v in overrides.items() if v is not None})
+
+    # Starter config files copied every default, so many say localhost. Same
+    # machine, same port - minus the ~2 s IPv6 detour on every request (above).
+    cfg["ollama_url"] = _loopback_ipv4(str(cfg.get("ollama_url") or DEFAULTS["ollama_url"]))
 
     if not cfg.get("allowed_write_roots"):
         cfg["allowed_write_roots"] = default_write_roots()

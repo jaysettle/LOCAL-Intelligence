@@ -1,5 +1,41 @@
 # Changelog
 
+## 0.10.0 — fast decisions: skip thinking when it isn't needed (local, or with Jev)
+
+**`decide.py`: typed decisions.** A narrow question with fixed answers — pick one, rate on a scale,
+yes/no — comes back as probabilities, not prose, so code can act on it. The request and answer
+shapes are TypeSafe's System One format, the API of their Jev model, so one caller works with any
+backend:
+- **`gemma` (default, local):** the chat model through Ollama. Options become letters, Ollama
+  generates three tokens with thinking off, and the letter probabilities are read from the token
+  scores. Nothing leaves the machine and nothing new is installed.
+- **`systemone` (opt-in):** Jev at `https://api.typesafe.ai`, or any server speaking the format.
+  The key is read from an environment variable and never stored. With TypeSafe's cloud the prompt
+  text leaves the machine, and gemma says so once per session.
+- A failed decision never breaks a turn: it comes back marked unknown and nothing changes.
+
+**First use: the thinking decision.** `decide_thinking: shadow` asks "does this need step-by-step
+reasoning?" before each turn and logs the answer and the turn's duration to
+`.gemma/decisions.jsonl`, changing nothing; `/decisions` shows the log. `decide_thinking: on`
+turns thinking off for prompts confidently judged simple. Off by default.
+
+Measured on the RTX 2070 laptop:
+
+| | gemma4:12b, local | Jev, cloud |
+|---|---|---|
+| 20 labelled prompts, 10 simple / 10 reasoning | 20/20 | 20/20 |
+| Time per decision | ~0.7 s | ~0.4 s |
+| "what is 2+2" as a full turn, thinking on → decided off | 12.6 s → 8.5 s | 12.6 s → 8.3 s |
+| A comparison question | kept thinking | kept thinking |
+
+gemma's own probabilities are nearly always 99%+, so its confidence is not calibrated yet — which
+is why this starts in shadow mode.
+
+**`localhost` → `127.0.0.1`.** On Windows, `localhost` tries IPv6 first; Ollama listens on IPv4
+only, and each refused connection waits ~2 s before falling back (measured 2.05 s vs 0.01 s).
+gemma opens a new connection for every model request, so every step of every turn paid it. The
+default is now `127.0.0.1`, and a `localhost` URL in an existing config is rewritten on load.
+
 ## 0.9.0 — real Excel files: `write_spreadsheet`
 
 Asked for "an Excel sheet of the tags", the model had no way to make one. It tried pandas through the
