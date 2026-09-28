@@ -23,11 +23,31 @@ def new_session_path() -> Path:
     return session_dir() / f"{datetime.now().strftime('%Y%m%d-%H%M%S')}.json"
 
 
+def _without_images(messages: List[Dict]) -> List[Dict]:
+    """Copies of the turns with images replaced by a note.
+
+    view_image can put several base64 screenshots into one turn; saving them
+    would rewrite megabytes of JSON after every turn, into a project folder that
+    may well be synced. The session keeps the text of what was seen; the pictures
+    can be looked at again.
+    """
+    out: List[Dict] = []
+    for m in messages:
+        if isinstance(m, dict) and m.get("images"):
+            m = dict(m)
+            n = len(m.pop("images") or [])
+            note = f"[{n} image(s) were attached here; images are not kept in saved sessions]"
+            m["content"] = f"{m.get('content') or ''}\n{note}".strip()
+        out.append(m)
+    return out
+
+
 def save_session(path: Path, messages: List[Dict], model: str) -> None:
     """Persist a conversation (excluding the system prompt at index 0)."""
     try:
         path.parent.mkdir(parents=True, exist_ok=True)
         body = messages[1:] if messages and messages[0].get("role") == "system" else list(messages)
+        body = _without_images(body)
         created = _read_created(path)
         data = {
             "created": created,

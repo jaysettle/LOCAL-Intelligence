@@ -203,6 +203,23 @@ def _grab_clipboard_to_file():
 # Shared command handling
 # ---------------------------------------------------------------------------
 
+def _split_path_arg(rest: str):
+    """'"C:\\My Pictures\\a.png" what is it' -> (path, prompt). A quoted path may
+    contain spaces; an unquoted one ends at the first space. The old split on
+    whitespace broke any path with a space in it."""
+    rest = rest.strip()
+    if rest[:1] in ('"', "'"):
+        quote = rest[0]
+        end = rest.find(quote, 1)
+        if end == -1:
+            return rest[1:].strip(), ""
+        return rest[1:end], rest[end + 1:].strip()
+    bits = rest.split(maxsplit=1)
+    if not bits:
+        return "", ""
+    return bits[0], (bits[1].strip() if len(bits) > 1 else "")
+
+
 def session_dir_lookup(name: str):
     """Resolve a session name/filename to a path in this folder's session dir."""
     from .sessions import session_dir
@@ -427,10 +444,17 @@ def _handle_command(line, cfg, messages, console, session_path):
         console.print(f"[dim]resumed {target.name} ({len(prior)} messages)[/dim]")
         return ("handled", None, None)
     if cmd == "/image":
-        if len(parts) < 3:
-            console.print("[red]usage: /image <path> <prompt>[/red]")
+        rest = line.split(maxsplit=1)
+        path_text, prompt_text = _split_path_arg(rest[1] if len(rest) > 1 else "")
+        if not path_text or not prompt_text:
+            console.print('[red]usage: /image <path> <prompt>[/red] [dim](quote a path that has spaces: '
+                          '/image "C:\\My Pictures\\a.png" what is this)[/dim]')
             return ("handled", None, None)
-        return ("run", parts[2], [parts[1]])
+        target = Path(os.path.expanduser(path_text))
+        if not target.is_file():
+            console.print(f"[red]no such image file:[/red] {target}")
+            return ("handled", None, None)
+        return ("run", prompt_text, [str(target)])
     if cmd == "/paste":
         rest = line.split(maxsplit=1)
         prompt_text = rest[1] if len(rest) > 1 else "What is in this image? Describe it."

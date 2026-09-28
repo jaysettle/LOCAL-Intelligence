@@ -116,7 +116,7 @@ line-by-line reader is the default.
 
 | Format | Notes |
 |---|---|
-| **PDF** | Per-page text. Scanned/image-only PDFs report that they need OCR rather than returning nothing. |
+| **PDF** | Per-page text. A scanned/image-only PDF is flagged as such, and its page images can be looked at with `view_image`. |
 | **Word** `.docx` | Paragraphs, headings, tables. |
 | **Excel** `.xlsx` `.xls` | Per sheet, as rows. Caps at 200 rows/sheet. |
 | **PowerPoint** `.pptx` | Per slide, including tables and speaker notes. |
@@ -134,6 +134,41 @@ Two behaviours worth knowing:
 
 `.msg` (Outlook) is deliberately unsupported: the only maintained reader pulls in 20+ packages
 including GPL-licensed ones. Export to `.eml` instead.
+
+---
+
+## Looking at images
+
+The model can see. Ask about an image the way you would a document:
+
+```
+> list the tags circled in red in Dashboard Tags for Canary.docx and put them in a sheet
+> what error is on screen in C:\shots\alarm.png
+> read the handwritten notes in scan.pdf
+```
+
+`view_image` shows it image files (`.png .jpg .gif .bmp .webp .tif`) and the **pictures inside
+documents** — Word, PowerPoint, Excel, OpenDocument, EPUB, PDF. `read_document` reads only text, but
+it now says at the top of its output when a document also contains pictures, which is the model's cue
+to look. A scanned PDF (no text at all) is flagged the same way: its pages are images, so it can be
+read by looking.
+
+**Large screenshots arrive as an overview plus four zoomed tiles.** Every image costs the model about
+the same (~260 tokens), because its vision encoder shrinks each picture to a fixed size — so in a
+full-HD screenshot, small text gets blurred. Measured: with 16 px tag names on a 1920x1080 screen, the
+whole-frame view found every red-marked tag but misread digits in half of them (`PT-9079` for
+`PT-9779`) — plausible, and wrong. As tiles it read all of them exactly. Anything wider or taller than
+1280 px is tiled automatically; it costs about four times the tokens and a couple of seconds.
+
+You can also attach an image yourself:
+
+```
+/image "C:\My Pictures\alarm screen.png" what does the red banner say     (quote paths with spaces)
+/paste what is this                                                       (clipboard image)
+```
+
+`/check` looks at the same pictures the answer was based on, so it can verify image-based answers too.
+Images are not kept in saved sessions — the text of what was seen is.
 
 ---
 

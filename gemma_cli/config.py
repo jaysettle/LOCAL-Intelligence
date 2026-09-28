@@ -45,6 +45,10 @@ DEFAULTS: Dict[str, Any] = {
     # child_writes: true. The final synthesis turn is where files get written.
     "child_readonly": True,
     "per_file_max_items": 12,
+    # Loop detection: the same tool call a third time gets a warning instead of
+    # running. After this many warnings in one turn, the turn ends - observed
+    # live, warnings alone never stopped a stuck model and it burned all 25 calls.
+    "max_loop_nudges": 2,
     # None => defaults to [home, tempdir, cwd] at load time
     "allowed_write_roots": None,
     "timeout": 600,

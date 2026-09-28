@@ -34,7 +34,8 @@ TOOLS = [
             "Excel (.xlsx/.xls), PowerPoint (.pptx), OpenDocument (.odt/.ods/.odp), RTF, EPUB, "
             "email (.eml), Jupyter notebooks (.ipynb), CSV/TSV and HTML. Returns plain text split "
             "into labelled pages / sheets / slides. Use read_file for plain text, code and markdown; "
-            "use this for anything binary or Office-shaped."
+            "use this for anything binary or Office-shaped. It reads TEXT only - it tells you when a "
+            "document also contains pictures, and view_image shows them."
         ),
         "input_schema": {
             "type": "object",
@@ -43,6 +44,27 @@ TOOLS = [
                 "offset": {"type": "integer", "description": "1-based page/sheet/slide to start at. Optional, default 1.", "default": 1},
                 "limit": {"type": "integer", "description": "How many pages/sheets/slides to read. Optional, 0 = as many as fit.", "default": 0},
                 "max_chars": {"type": "integer", "description": "Cap on characters returned. Optional, default 20000.", "default": 20000},
+            },
+            "required": ["path"],
+        },
+    },
+    {
+        "name": "view_image",
+        "description": (
+            "LOOK at an image - you can see it. Use for image files (.png .jpg .gif .bmp .webp .tif) "
+            "and for pictures embedded in Word, PowerPoint, Excel, OpenDocument, EPUB or PDF files "
+            "(read_document tells you when a document contains pictures). Use it whenever the answer "
+            "may be in a picture: a screenshot, a diagram, a scan, tags marked with boxes or circles. "
+            "For a document, `index` picks one picture (1 = first); leave it out to see the first "
+            "ones. For a PDF, `page` picks the page. Large pictures arrive as an overview plus zoomed "
+            "tiles. Do NOT use this for ordinary text documents - use read_document."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "path": {"type": "string", "description": "An image file, or a document that contains pictures"},
+                "index": {"type": "integer", "description": "Which embedded picture to show (1-based). Optional."},
+                "page": {"type": "integer", "description": "PDF page number (1-based). Optional."},
             },
             "required": ["path"],
         },

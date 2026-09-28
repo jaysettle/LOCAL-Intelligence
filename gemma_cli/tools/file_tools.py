@@ -69,6 +69,14 @@ def read_file(inp: Dict[str, Any]) -> str:
 
     # Binary document formats read as mojibake here — send the model to the tool
     # that can actually parse them rather than letting it "read" garbage.
+    from .image_tools import IMAGE_EXTS
+    if path.lower().endswith(IMAGE_EXTS):
+        ext = os.path.splitext(path)[1].lower()
+        return (
+            f"Error: {ext} is an image, which read_file cannot show you. "
+            f"Call view_image with path={path!r} to look at it."
+        )
+
     from .doc_tools import BINARY_DOC_EXTS
     if path.lower().endswith(BINARY_DOC_EXTS):
         ext = os.path.splitext(path)[1].lower()
