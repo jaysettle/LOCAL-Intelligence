@@ -95,8 +95,10 @@ line-by-line reader is the default.
 
 | Tool | Purpose |
 |------|---------|
-| `read_file` / `write_file` | Read files; write whole new files (fenced to allowed roots) |
+| `read_file` / `write_file` | Read files; write whole new plain-text files (fenced to allowed roots) |
 | `read_document` | Read PDF, Word, Excel, PowerPoint, OpenDocument, RTF, EPUB, email, notebooks, CSV |
+| `view_image` | Look at image files and at pictures inside documents |
+| `write_spreadsheet` | Create a real Excel `.xlsx` (or `.csv`) from a table |
 | `edit_file` | Change part of a file by exact string replacement (safe for edits) |
 | `delete_file` | Delete to the OS trash / Recycle Bin (recoverable) |
 | `shell` | Run **PowerShell** (Windows) or **bash** (Linux/macOS) commands |
@@ -142,7 +144,7 @@ including GPL-licensed ones. Export to `.eml` instead.
 The model can see. Ask about an image the way you would a document:
 
 ```
-> list the tags circled in red in Dashboard Tags for Canary.docx and put them in a sheet
+> list the tags circled in red in screens.docx and put them in a sheet
 > what error is on screen in C:\shots\alarm.png
 > read the handwritten notes in scan.pdf
 ```
@@ -169,6 +171,30 @@ You can also attach an image yourself:
 
 `/check` looks at the same pictures the answer was based on, so it can verify image-based answers too.
 Images are not kept in saved sessions — the text of what was seen is.
+
+---
+
+## Making spreadsheets
+
+Ask for an Excel file and you get a real one:
+
+```
+> put the tags circled in red in screens.docx into an Excel sheet
+> make a spreadsheet of the PDFs in this folder with their page counts
+```
+
+`write_spreadsheet` writes an `.xlsx` with openpyxl, which is already installed for reading
+workbooks. Ask for CSV and it writes a `.csv` that opens cleanly in Excel, accents included.
+
+- **Numbers are numbers**, so Excel can sum them. Codes with a leading zero, like `007`, stay text.
+- **A cell starting with `=` is a formula.** It is calculated when the file is opened.
+- **The header row is bold and frozen**, and columns are sized to fit.
+- **Existing files are never edited in place.** openpyxl would drop their charts and pictures.
+  Replacing a file takes `overwrite=true`, and the old copy is backed up to `.gemma/backups/` first.
+- **A file open in Excel can't be replaced.** You're told to close it and try again.
+
+`write_file` is for plain text. Pointed at a `.xlsx` it builds a real workbook rather than a corrupt
+one; pointed at `.docx`, `.pptx` or `.pdf` it refuses and names the right tool.
 
 ---
 

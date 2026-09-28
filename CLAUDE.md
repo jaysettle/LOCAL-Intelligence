@@ -34,9 +34,10 @@ The installed command is **`gemma`**. Primary entry: `gemma go` (interactive cha
 | `gemma_cli/skills.py` | Skill discovery, frontmatter parsing, the system-prompt index, capture-from-transcript, usage reporting; per-file mode (`mode`, `globs`, `discover_items`, `render_item` / `render_synthesis`) |
 | `gemma_cli/review.py` | `/check` — a thinking-free second pass over the last turn's evidence vs answer (including the images it looked at); prints a review, never rewrites |
 | `gemma_cli/tools/image_tools.py` | `view_image`; Pillow normalisation (`encode_for_model`, tiling); pictures inside documents (`list_embedded_images`, `describe_embedded`); `ToolOutput` — the str subclass that carries images out of a tool |
+| `gemma_cli/tools/sheet_tools.py` | `write_spreadsheet` — real `.xlsx` (openpyxl) or `.csv`; `rows_from_any` / `rows_from_text` normalise whatever shape the model sends (CSV, markdown table, JSON, records, columns); `save_rows` is shared with `write_file`'s `.xlsx` path |
 | `gemma_cli/statusline.py` | GPU/CPU/VRAM sampling (nvidia-smi + psutil); `render()` builds the bar text for both REPLs; `StatusBar` is the rich-`Live` bottom bar used by the plain REPL and one-shot path (the `--live` REPL uses prompt_toolkit's toolbar instead). Anything printed while a `StatusBar` is up must be whole lines — see `render.LineBuffer` |
 | `gemma_cli/clipboard.py` | Grab an image off the clipboard (Pillow `ImageGrab`) for `/paste` and Alt+V |
-| `gemma_cli/tools/` | `definitions.py` (schemas), `executor.py` (dispatch), `file_tools.py`, `doc_tools.py`, `shell_tools.py`, `web_tools.py`, `memory_tools.py`, `plan_tools.py`, `skill_tools.py` |
+| `gemma_cli/tools/` | `definitions.py` (schemas), `executor.py` (dispatch), `file_tools.py`, `doc_tools.py`, `image_tools.py`, `sheet_tools.py`, `shell_tools.py`, `web_tools.py`, `memory_tools.py`, `plan_tools.py`, `skill_tools.py` |
 | `install.ps1` / `install.sh` | Idempotent, self-updating installers (Windows / POSIX) |
 | `README.md` / `docs/USAGE.md` | README is **installation only** — keep it that way; usage docs go in `docs/USAGE.md` |
 
@@ -67,6 +68,9 @@ The installed command is **`gemma`**. Primary entry: `gemma go` (interactive cha
 3. Dispatch entry in `tools/executor.py` `_DISPATCH`.
 4. Optionally a discipline line in `sysprompt.py`.
 5. A pytest in `tests/`.
+6. If it writes, deletes or runs anything, add it to `agent.MUTATING_TOOLS`. That one set drives
+   both the `--approve` prompt and the read-only per-file children, so it can't be gated in one
+   place and forgotten in the other.
 
 ---
 
@@ -86,6 +90,7 @@ The installed command is **`gemma`**. Primary entry: `gemma go` (interactive cha
 - **The shell tool runs PowerShell in a private console.** Output used to be decoded with the locale's cp1252; byte `0x9d` (from `Get-Content` on a `.docx`) crashed the reader thread and the tool said "(no output)". Now PowerShell is told to emit UTF-8 and Python decodes UTF-8 with `errors="replace"`. The UTF-8 switch (`[Console]::OutputEncoding`) sets the code page of the *whole console*, which a child shares with its parent — measured, it leaked into the user's terminal (437 → 65001) and would outlive gemma. `CREATE_NO_WINDOW` gives the child its own hidden console; keep it. `stdin=DEVNULL` so a stdin-reading command gets EOF instead of the user's keyboard. Binary-looking output gets a note pointing at `read_document` / `view_image`.
 - **Loop detection ends the turn after `max_loop_nudges` warnings (2).** Warnings alone never stopped a stuck model: the same session logged ten "loop detected" nudges and still spent all 25 calls. When it stops, every outstanding tool call gets a "Not run" reply and a closing assistant message is appended — Ollama expects each `tool_calls` entry answered. The tool-call-limit exit appends a closing assistant message too.
 - **A skill body is executed instructions.** It is the user's own file on their own machine, so the trust model is the same as a shell script — but that is why `load_skill` is gated by `allow_model_skills` and why the docs warn about skills from other people.
+- **Spreadsheets are written by `write_spreadsheet`, and its `rows` is a string.** Before it existed, "make an Excel sheet" ended in pandas-through-the-shell (not installed) and a CSV, and `write_file` to `x.xlsx` would have written text Excel can't open — so `write_file` now converts `.xlsx` content into a real workbook and refuses `.docx`/`.pptx`/`.pdf`/`.xls`/`.ods` and friends, and `edit_file` refuses them too. The schema asks for CSV text or a markdown table, not an array of arrays: measured on `gemma4:12b`, one live run each, the nested-array schema ended the turn in an **empty reply** right after `view_image`, while the string schema got a correct call first time (4/4 tags and values exact, read back by LibreOffice). One run each is a strong hint, not proof — re-measure before switching back. The parser still accepts every other shape (JSON, list of lists, records, dict of columns). Existing workbooks are never edited in place, because openpyxl drops charts and images on re-save: replacing needs `overwrite=true` and backs up first. openpyxl writes formulas **without cached values** and relies on its default `fullCalcOnLoad=True` so Excel/Calc compute them on open — don't turn that off.
 - **Format is decided by content, not extension.** `doc_tools._sniff` reads magic bytes and looks *inside* ZIP containers for the marker entry (`word/document.xml`, `xl/workbook.xml`, `mimetype`), so renamed files still work. Extraction output is labelled by page/sheet/slide and capped by `max_chars` with `offset`/`limit` paging — a 400-page PDF must never be handed whole to a 32K context.
 
 ---
@@ -124,13 +129,14 @@ The installed command is **`gemma`**. Primary entry: `gemma go` (interactive cha
 
 ---
 
-## Current state (v0.8.0)
+## Current state (v0.9.0)
 
 **Working and shipped (default `gemma go`, the plain REPL):**
-- Agentic tool loop; tools: `read_file`, `read_document`, `view_image`, `write_file`, `edit_file`, `delete_file`, `shell`, `glob`, `grep`, `list_directory`, `web_search`, `web_fetch`, `remember`, `load_skill`, `set_plan`, `complete_step`.
+- Agentic tool loop; tools: `read_file`, `read_document`, `view_image`, `write_spreadsheet`, `write_file`, `edit_file`, `delete_file`, `shell`, `glob`, `grep`, `list_directory`, `web_search`, `web_fetch`, `remember`, `load_skill`, `set_plan`, `complete_step`.
 - Project + global memory (`GEMMA.md` auto-load + `remember`), session save/`--resume`, backup-on-write, trash-not-delete, approval mode (`--approve`), context compaction, current-date grounding, local SearXNG web search.
 - Vision: `view_image` for image files and pictures inside Word/PowerPoint/Excel/OpenDocument/EPUB/PDF (scans included); `read_document` flags documents that contain pictures; large images tiled; `/image` (quoted paths) and `/paste` share the same normalisation. `/check` sees the images an answer was based on.
 - Document reading (`read_document`): PDF, Word, Excel, PowerPoint, OpenDocument, RTF, EPUB, `.eml`, `.ipynb`, CSV/TSV, HTML; content-sniffed format detection, page/sheet/slide paging, LibreOffice fallback for legacy `.doc`/`.ppt`.
+- Spreadsheet writing (`write_spreadsheet`): real `.xlsx` or BOM'd `.csv`; typed cells, formulas, bold frozen header, backup-before-overwrite. `write_file` turns `.xlsx` content into a real workbook and refuses other binary Office formats. Verified end to end on the red-box-tags prompt: `view_image` → `write_spreadsheet` → LibreOffice read back 4/4 tags exact.
 - Skills: markdown procedures in `skills/` (project) and `<config_dir>/skills/` (global), run as `/<name>`, captured with `/skill new <name>`, reported by `/skills` and `gemma skills`. `mode: per-file` skills run one read-only child per file, then a synthesis turn. `/check` reviews the last answer against its evidence.
 - `thinking: false` / `--no-thinking` actually disables reasoning (67 s → 10 s on a trivial turn, 8 GB card). Status bar in the plain REPL; Ctrl+C stops an answer, not the session; pasted multi-line prompts are one prompt.
 - `gemma update` from any folder: finds the checkout, pulls, reinstalls (deferred on Windows); `--check`, `--full`, `--repo`.
@@ -156,6 +162,9 @@ gemma "what is 2+2"         # one-shot smoke test (needs Ollama running)
 - **Branch → PR → `dev` → merge to `main`.** Don't commit straight to `dev`/`main`; open a PR.
 - **Installers are the deploy path.** On a target machine: `git clone` (or ZIP) then `install.ps1` / `install.sh`. Re-running an installer self-updates. Config lives at `%APPDATA%\gemma-cli\config.yaml` (Windows) / `~/.config/gemma-cli/config.yaml` (POSIX).
 - **Keep it secret-clean.** This repo is public — no credentials, private IPs, internal hostnames, or personal paths in committed files.
+- **Validate Office output outside Python.** openpyxl reading back its own file proves little. LibreOffice headless is the independent check: use `soffice.com` (the console entry point — `soffice.exe` is the GUI launcher and hangs even on `--version`, leaving processes behind), give it a throwaway profile so it can't collide with a running LibreOffice, and put a timeout on it:
+  `soffice.com -env:UserInstallation=file:///<temp>/lo_profile --headless --norestore --convert-to "csv:Text - txt - csv (StarCalc):44,34,76,1" --outdir out file.xlsx`
+  Formulas come out computed, so this also checks `fullCalcOnLoad`.
 
 ## Parked / roadmap
 - Fix or replace the live REPL rendering (consider a `prompt_toolkit` full `Application` or a different TUI lib; validate on real Windows terminals).

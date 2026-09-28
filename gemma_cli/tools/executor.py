@@ -8,6 +8,7 @@ from .file_tools import (
 )
 from .doc_tools import read_document
 from .image_tools import view_image
+from .sheet_tools import write_spreadsheet
 from .shell_tools import shell, grep
 from .web_tools import web_search, web_fetch
 from .memory_tools import remember
@@ -19,6 +20,7 @@ _DISPATCH = {
     "read_document": read_document,
     "view_image": view_image,
     "write_file": write_file,
+    "write_spreadsheet": write_spreadsheet,
     "edit_file": edit_file,
     "delete_file": delete_file,
     "shell": shell,

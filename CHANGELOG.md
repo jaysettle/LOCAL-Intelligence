@@ -1,5 +1,35 @@
 # Changelog
 
+## 0.9.0 — real Excel files: `write_spreadsheet`
+
+Asked for "an Excel sheet of the tags", the model had no way to make one. It tried pandas through the
+shell (not installed) and fell back to a CSV. The worse outcome was one step away: `write_file` to
+`tags.xlsx` writes *text* into a file named `.xlsx`, which Excel refuses to open.
+
+**`write_spreadsheet`** creates a real `.xlsx` (or a `.csv`) with openpyxl, which was already a
+dependency for reading workbooks — nothing new to install.
+- `rows` is **text**: CSV lines or a markdown table, first row = headers. JSON, a list of rows, a list
+  of records and a dict of columns are accepted too, because small models send whatever they send.
+- Numbers stay numbers so Excel can sum them; codes with a leading zero (`007`) stay text; `=SUM(...)`
+  is a formula. The header row is bold and frozen, columns are sized to their content.
+- An existing file is never edited in place (openpyxl drops charts and pictures when it re-saves):
+  replacing one needs `overwrite=true`, and the old file is backed up to `.gemma/backups/` first.
+- A file open in Excel gets "close it and try again", not a traceback.
+- Validated outside Python: LibreOffice Calc opened every output headless and read back exactly the
+  cells written — tags with `$`, `/` and `#` in them, numbers, leading-zero codes, and a
+  formula computed to its value.
+
+**`write_file` can no longer corrupt an Office file.** Text aimed at a `.xlsx` path is turned into a
+real workbook; `.docx`, `.pptx`, `.pdf`, `.xls`, `.ods` and friends are refused with a pointer to the
+right tool. `edit_file` refuses them too.
+
+**One list of mutating tools.** `write_spreadsheet` joins `write_file`, `edit_file`, `delete_file`
+and `shell` in `agent.MUTATING_TOOLS`, which drives both the `--approve` prompt and the read-only
+per-file child runs — a new write tool can't be added to one and forgotten in the other.
+
+**An empty reply says so.** If the model ends a turn with no text even after the nudge, gemma prints
+"the model returned an empty reply" instead of returning to the prompt in silence.
+
 ## 0.8.0 — gemma can see: `view_image`, pictures in documents, a shell that can't crash
 
 From one real session: *"Create an excel sheet of the tags circled or squared within red boxes on

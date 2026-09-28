@@ -8,6 +8,7 @@ trash (recoverable).
 
 import difflib
 import glob as glob_module
+import json
 import os
 import shutil
 from datetime import datetime
@@ -53,6 +54,29 @@ def _backup_existing(target: Path) -> None:
         shutil.copy2(target, backup_dir / f"{target.name}.{ts}.bak")
     except Exception:
         pass  # never let a backup failure block the actual operation
+
+
+# Formats write_file must not produce: they are binary containers, so writing
+# text into one makes a file its application refuses to open. .xlsx is not here -
+# write_file turns text aimed at a .xlsx into a real workbook (see write_file).
+_NOT_PLAIN_TEXT = {
+    ".xls": "legacy Excel file", ".xlsm": "macro-enabled Excel file", ".ods": "OpenDocument spreadsheet",
+    ".docx": "Word document", ".doc": "Word document", ".odt": "OpenDocument text file",
+    ".pptx": "PowerPoint file", ".ppt": "PowerPoint file", ".odp": "OpenDocument presentation",
+    ".pdf": "PDF",
+}
+_SPREADSHEET_EXTS = (".xlsx", ".xls", ".xlsm", ".ods")
+
+
+def _not_plain_text_msg(target: Path, verb: str) -> str:
+    ext = target.suffix.lower()
+    kind = _NOT_PLAIN_TEXT.get(ext, "binary file")
+    head = f"Error: {verb} works on plain text, so {target.name} would be a corrupt {kind}."
+    if ext in _SPREADSHEET_EXTS:
+        return (f"{head} For a spreadsheet, read it with read_document if needed, then call "
+                f"write_spreadsheet with a path ending in .xlsx.")
+    return (f"{head} Write the content as a .md or .txt file instead (Word opens those), and tell "
+            "the user this format cannot be created here.")
 
 
 def read_file(inp: Dict[str, Any]) -> str:
@@ -111,6 +135,14 @@ def write_file(inp: Dict[str, Any]) -> str:
     if not _is_write_allowed(target):
         return _write_denied_msg(target)
 
+    ext = target.suffix.lower()
+    if ext == ".xlsx":
+        return _write_xlsx_from_content(target, content)
+    if ext in _NOT_PLAIN_TEXT:
+        return _not_plain_text_msg(target, "write_file")
+    if not isinstance(content, str):
+        content = json.dumps(content, ensure_ascii=False, indent=2)
+
     try:
         _backup_existing(target)
         target.parent.mkdir(parents=True, exist_ok=True)
@@ -119,6 +151,28 @@ def write_file(inp: Dict[str, Any]) -> str:
         return f"Successfully wrote {len(content)} bytes to {target}"
     except Exception as e:
         return f"Error writing file: {e}"
+
+
+def _write_xlsx_from_content(target: Path, content: Any) -> str:
+    """write_file aimed at a .xlsx: a small model's natural move when asked for an
+    Excel sheet. Writing its text verbatim would make a file Excel refuses to
+    open, so read the text as a table and write a real workbook instead."""
+    from .sheet_tools import rows_from_any, save_rows
+
+    rows = rows_from_any(content)
+    if not rows:
+        return "Error: nothing to write - the content has no rows. Use write_spreadsheet with rows."
+    try:
+        _backup_existing(target)
+        target.parent.mkdir(parents=True, exist_ok=True)
+        n, width = save_rows(target, rows)
+    except PermissionError:
+        return f"Error: could not write {target} - it is probably open in Excel. Close it and try again."
+    except Exception as e:
+        return f"Error writing spreadsheet: {e}"
+    return (f"Wrote a real Excel workbook to {target} - {n} row(s) x {width} column(s). The text was read "
+            "as a table, because text written straight into a .xlsx would be a file Excel cannot open. "
+            "Next time use write_spreadsheet with rows for exact control.")
 
 
 def edit_file(inp: Dict[str, Any]) -> str:
@@ -142,6 +196,10 @@ def edit_file(inp: Dict[str, Any]) -> str:
         return f"Error: File not found: {target}"
     if target.is_dir():
         return f"Error: Path is a directory, not a file: {target}"
+    if target.suffix.lower() in _NOT_PLAIN_TEXT or target.suffix.lower() == ".xlsx":
+        # Without this a small model "adding a row" to tags.xlsx gets a codec
+        # error and learns nothing about what to do instead.
+        return _not_plain_text_msg(target, "edit_file")
 
     try:
         text = target.read_text(encoding="utf-8")

@@ -34,6 +34,12 @@ Event = Tuple[str, Any]
 
 _CHARS_PER_TOKEN = 4  # rough heuristic for the compaction budget
 
+# Tools that change the machine. ONE list, used for both the --approve gate in
+# run_turn and the tool list of read-only child runs: two copies drift, and a
+# new writing tool added to only one would slip past approval mode or past the
+# read-only children (observed: a child writing INDEX.md before this guard).
+MUTATING_TOOLS = frozenset({"write_file", "write_spreadsheet", "edit_file", "delete_file", "shell"})
+
 
 class AgentError(Exception):
     pass
@@ -160,8 +166,8 @@ def run_turn(
     (see run_child) use them to give a subtask a narrower tool set, a smaller
     iteration budget, and thinking off.
 
-    approver: optional callable (name, args) -> bool. When set, mutating tools
-    (write_file, edit_file, delete_file, shell) are gated on its approval.
+    approver: optional callable (name, args) -> bool. When set, MUTATING_TOOLS
+    (file writes, spreadsheets, edits, deletes, shell) are gated on its approval.
     cancel: optional threading.Event. When set mid-turn, the current response is
     stopped cooperatively (the HTTP stream is closed) and the turn ends.
     """
@@ -187,7 +193,7 @@ def run_turn(
     # Only ever SEND the field when disabling: models without a thinking mode
     # reject it, and the default must keep working for them.
     think_on = cfg.get("thinking", True) if think is None else bool(think)
-    mutating = {"write_file", "edit_file", "delete_file", "shell"}
+    mutating = MUTATING_TOOLS
 
     recent_sigs: List[str] = []  # for loop detection
     empty_nudges = 0
@@ -268,6 +274,10 @@ def run_turn(
                     "content": "You returned nothing. Either call a tool to make progress or give your final answer now.",
                 })
                 continue
+            if not content_acc.strip():
+                # Still nothing after the nudge. Say so: a silent end looks like a
+                # hang or a crash (observed while testing a new tool).
+                yield ("notice", "the model returned an empty reply - try rephrasing the request")
             messages.append({"role": "assistant", "content": content_acc})
             yield ("done", None)
             return
@@ -365,11 +375,10 @@ def run_turn(
 # rather than in a prompt.
 CHILD_EXCLUDED_TOOLS = frozenset()
 
-# What a read-only child may not do. Observed live: given a per-file skill whose
-# last step was "write everything to INDEX.md", the FIRST child wrote INDEX.md
-# with its one line - and the next child would have overwritten it. Writing is
-# the synthesis turn's job; children read.
-MUTATING_TOOLS = frozenset({"write_file", "edit_file", "delete_file", "shell"})
+# A read-only child may not use MUTATING_TOOLS (defined at the top). Observed
+# live: given a per-file skill whose last step was "write everything to
+# INDEX.md", the FIRST child wrote INDEX.md with its one line - and the next
+# child would have overwritten it. Writing is the synthesis turn's job.
 
 
 def run_child(
