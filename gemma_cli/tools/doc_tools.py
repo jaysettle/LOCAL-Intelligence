@@ -75,6 +75,18 @@ class DocError(Exception):
     """Raised by an extractor with a message meant for the model to read."""
 
 
+class NoTextLayer(DocError):
+    """A PDF whose pages carry no text at all — a scan or image-only export.
+
+    Its own type so read_document can offer the way forward (view_image the page
+    images) instead of the dead end "would need OCR".
+    """
+
+    def __init__(self, message: str, pages: int):
+        super().__init__(message)
+        self.pages = pages
+
+
 # ---------------------------------------------------------------------------
 # Format detection
 # ---------------------------------------------------------------------------
@@ -289,9 +301,11 @@ def _extract_pdf(path: Path) -> List[Section]:
         sections.append((f"page {i}", _clean(text)))
 
     if sections and empty == len(sections):
-        raise DocError(
+        raise NoTextLayer(
             f"no text layer found in this PDF ({len(sections)} pages). It is probably a scan "
-            "or image-only export; extracting it would need OCR, which is not installed."
+            "or image-only export with no extractable page images either, so reading it would "
+            "need OCR, which is not installed.",
+            pages=len(sections),
         )
     return sections
 
@@ -703,8 +717,21 @@ def read_document(inp: Dict[str, Any]) -> str:
             f"Supported: {', '.join(SUPPORTED_EXTS)}. For plain text or code, use read_file."
         )
 
+    from .image_tools import describe_embedded, list_embedded_images, page_ranges
+
     try:
         sections = extractor(path)
+    except NoTextLayer as e:
+        # A scan is only a dead end if it has no page images either.
+        pictures = list_embedded_images(path, kind)
+        if pictures:
+            return (
+                f"{path.name} [pdf, {e.pages} pages] has no text layer: its pages are images (a scan, or "
+                f"an image-only export), so there is no text to read. You CAN look at the pages: call "
+                f"view_image with path=\"{path}\" and page=1 (page images on page(s) "
+                f"{page_ranges([im.page for im in pictures])})."
+            )
+        return f"Error reading {path.name}: {e}"
     except DocError as e:
         return f"Error reading {path.name}: {e}"
     except Exception as e:
@@ -724,6 +751,17 @@ def read_document(inp: Dict[str, Any]) -> str:
     header = f"{path.name} [{kind}, {total} {unit}]"
     if note:
         header += f"\n{note}"
+    # Text extraction is blind to pictures. Say so up front - a small model that
+    # gets three lines back from a document full of screenshots otherwise concludes
+    # the document is nearly empty (observed) instead of looking at the pictures.
+    images_note = describe_embedded(list_embedded_images(path, kind), path, kind)
+    if images_note:
+        header += f"\n{images_note}"
+
+    if not any(text.strip() for _label, text in selected):
+        # An empty "--- part 1 ---" label reads as content to a small model; say
+        # plainly there is no text (the images note above says where to look).
+        return f"{header}\n\n(no extractable text)"
 
     body_parts: List[str] = []
     used_chars = 0

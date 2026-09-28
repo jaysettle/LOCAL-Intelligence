@@ -7,6 +7,7 @@ from .file_tools import (
     read_file, write_file, edit_file, delete_file, glob_files, list_directory
 )
 from .doc_tools import read_document
+from .image_tools import view_image
 from .shell_tools import shell, grep
 from .web_tools import web_search, web_fetch
 from .memory_tools import remember
@@ -16,6 +17,7 @@ from .skill_tools import load_skill
 _DISPATCH = {
     "read_file": read_file,
     "read_document": read_document,
+    "view_image": view_image,
     "write_file": write_file,
     "edit_file": edit_file,
     "delete_file": delete_file,
@@ -33,6 +35,9 @@ _DISPATCH = {
 
 
 def execute_tool(name: str, tool_input: Dict[str, Any]) -> str:
+    """Run a tool; always returns text. A tool that shows pictures returns an
+    image_tools.ToolOutput - still a str - whose `.images` run_turn attaches to
+    the tool message. Returned as-is so the images survive."""
     fn = _DISPATCH.get(name)
     if fn is None:
         return f"Error: Unknown tool '{name}'"

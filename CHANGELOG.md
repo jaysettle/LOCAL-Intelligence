@@ -1,5 +1,60 @@
 # Changelog
 
+## 0.8.0 — gemma can see: `view_image`, pictures in documents, a shell that can't crash
+
+From one real session: *"Create an excel sheet of the tags circled or squared within red boxes on
+this document"*. The tags were in screenshots inside a `.docx`. `read_document` returned three lines
+of text; the model could not see, did not know it could not, and thrashed for 25 tool calls — one of
+which crashed the shell tool, while loop detection warned ten times and never stopped it.
+
+**`view_image`** — the model can look at image files, and at pictures embedded in Word, PowerPoint,
+Excel, OpenDocument, EPUB and PDF files (scans included: their pages are images).
+- Built on measurements from the live `gemma4:12b`. **Ollama honours images on a `tool` message**,
+  so the pictures ride on the `view_image` result — no injected fake user turn. A control with the
+  image stripped hallucinated ("pressure sensor, pressure sensor"); with it, the model named exactly
+  the marked tags, and `prompt_eval_count` rose by ~262 tokens: the image really was processed.
+- **Large images go as an overview plus four overlapping zoomed tiles.** Every image costs ~260
+  tokens whatever its size — the encoder shrinks it to a fixed frame. On a 1920x1080 screen with
+  16 px tag text, the full frame found all four red-marked tags but **misread digits in two**
+  (`PT-9079` for `PT-9779`) — plausible and wrong. As 2x2 tiles: 4/4 exact. Anything over 1280 px is
+  tiled; the same applies to `/image` and `/paste`.
+- Everything passes through Pillow: transparency flattened onto white, palette/CMYK/16-bit modes to
+  RGB, first frame of animations, Word's EMF/WMF drawings rendered (Windows), always PNG, size-capped.
+- Tools still return strings: `ToolOutput` is a `str` subclass carrying `.images`.
+
+**`read_document` says when there are pictures** — `[Images: this document also contains 1 embedded
+image(s) … call view_image …]` at the top of its output. A scanned PDF with page images is no longer a
+dead end ("would need OCR"); it points at `view_image`. A picture-only document now says "(no
+extractable text)" instead of printing an empty `--- part 1 ---` label.
+
+**Shell tool: UTF-8 end to end, never crashes.** PowerShell's output was decoded with the locale's
+cp1252; byte `0x9d` from `Get-Content` on a `.docx` crashed the reader thread and the tool reported
+"(no output)". Now PowerShell emits UTF-8 and Python decodes it with `errors="replace"` — in a
+**private console** (`CREATE_NO_WINDOW`), because switching encoding in the shared console leaked into
+the user's terminal (measured: code page 437 → 65001, persisting after gemma exits). `stdin` is closed,
+so a command that reads input gets EOF instead of waiting on the keyboard. Binary-looking output comes
+with a pointer to `read_document` / `view_image`.
+
+**Loop detection stops the turn.** After `max_loop_nudges` warnings (default 2) the turn ends rather
+than burning the remaining budget; every outstanding tool call gets a reply and a closing assistant
+message is added, so the transcript stays well-formed. The tool-call-limit exit now closes the
+transcript too.
+
+**Also:** `/image` accepts quoted paths with spaces and refuses a missing file instead of silently
+sending no image; attachments that fail are explained to the model instead of dropped; `read_file` on
+an image points at `view_image`; `/check` sees the images the last answer was based on; saved sessions
+drop images (a note says so) instead of rewriting megabytes of base64 after every turn.
+
+**Verified live** on `gemma4:12b`, 8 GB RTX 2070, thinking off. The original request, verbatim,
+against a stand-in `.docx` holding a 1920x1080 screenshot with 16 px tags: `view_image` → overview +
+tiles → **all four marked tags exact** → a sheet written, in 4 minutes. A vague "summarize this
+document" made it `read_document` first, notice the `[Images: …]` note, and look — same four tags
+(46 s). An image-only PDF memo: `read_document` → "its pages are images" → `view_image` → the date,
+time and contact read back correctly (31 s); before this release that ended at "would need OCR".
+
+**Tests** — 56 new (282 total), with real files per format and Windows-only tests that drive real
+PowerShell for the shell fixes.
+
 ## 0.7.2 — What the first 12-file run taught
 
 A per-file run over a real 175-document folder (12 processed, read-only children, one parent

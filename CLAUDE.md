@@ -32,7 +32,8 @@ The installed command is **`gemma`**. Primary entry: `gemma go` (interactive cha
 | `gemma_cli/sessions.py` | Save/restore conversations under `.gemma/sessions/` (per project) |
 | `gemma_cli/updater.py` | `gemma update` — locate the checkout, git pull, reinstall (deferred on Windows) |
 | `gemma_cli/skills.py` | Skill discovery, frontmatter parsing, the system-prompt index, capture-from-transcript, usage reporting; per-file mode (`mode`, `globs`, `discover_items`, `render_item` / `render_synthesis`) |
-| `gemma_cli/review.py` | `/check` — a thinking-free second pass over the last turn's evidence vs answer; prints a review, never rewrites |
+| `gemma_cli/review.py` | `/check` — a thinking-free second pass over the last turn's evidence vs answer (including the images it looked at); prints a review, never rewrites |
+| `gemma_cli/tools/image_tools.py` | `view_image`; Pillow normalisation (`encode_for_model`, tiling); pictures inside documents (`list_embedded_images`, `describe_embedded`); `ToolOutput` — the str subclass that carries images out of a tool |
 | `gemma_cli/statusline.py` | GPU/CPU/VRAM sampling (nvidia-smi + psutil); `render()` builds the bar text for both REPLs; `StatusBar` is the rich-`Live` bottom bar used by the plain REPL and one-shot path (the `--live` REPL uses prompt_toolkit's toolbar instead). Anything printed while a `StatusBar` is up must be whole lines — see `render.LineBuffer` |
 | `gemma_cli/clipboard.py` | Grab an image off the clipboard (Pillow `ImageGrab`) for `/paste` and Alt+V |
 | `gemma_cli/tools/` | `definitions.py` (schemas), `executor.py` (dispatch), `file_tools.py`, `doc_tools.py`, `shell_tools.py`, `web_tools.py`, `memory_tools.py`, `plan_tools.py`, `skill_tools.py` |
@@ -50,7 +51,11 @@ The installed command is **`gemma`**. Primary entry: `gemma go` (interactive cha
   paths) and `skill_tools` (`allow_model_skills`). Tools never import config. Tests must call the setters (`set_allowed_write_roots`,
   `configure`) to isolate themselves.
 - **Every tool takes one dict and returns a `str`.** Errors are returned as readable strings for
-  the model, never raised — `execute_tool` catches anything that escapes.
+  the model, never raised — `execute_tool` catches anything that escapes. The one extension:
+  a tool that shows pictures returns `image_tools.ToolOutput`, a `str` subclass with `.images`
+  (base64 PNGs). `run_turn` sends `str(result)` as the text and attaches `.images` to the **tool
+  message itself**. Don't slice or concatenate a `ToolOutput` on its way through — string
+  operations return a plain `str` and the images are silently lost.
 - **The system prompt is rebuilt every launch** (date, cwd, cwd listing, write roots, memory) and
   is deliberately excluded from saved sessions, which store `messages[1:]` only.
 - **Compaction cuts at a user-message boundary** so a `tool` message is never orphaned from the
@@ -77,6 +82,9 @@ The installed command is **`gemma`**. Primary entry: `gemma go` (interactive cha
 - **Skill names are a security boundary, not a label.** They become slash commands *and* filenames, so `skills._SAFE_NAME` is anchored and rejects dots and separators — a `name:` in frontmatter can never escape the skills dir. A frontmatter name that fails validation falls back to the filename stem. Keep it that way.
 - **`gemma update` must never reinstall in-place on Windows.** (And finding the shim is half the battle: `launcher_path()` must consult PATH and the per-user scripts scheme, not just `sys.executable`'s folder. Beside-the-interpreter is only true in a venv; with system Python under Program Files pip does a per-user install and the shim lands in `%APPDATA%PythonPythonXYScripts`. Getting this wrong silently disables the deferred path.) Windows holds `gemma.exe` open while it runs; a pip reinstall launched from inside a running `gemma` is exactly what leaves a corrupt `~ocal_intelligence*.dist-info` behind and jams the *next* install (see the install-failure pitfall below). So the git pull runs inline and the install is handed to a helper that waits on the parent PID first. Two details that matter: the lock is **tested**, not inferred — `_launcher_is_locked()` asks Windows for a write handle on `gemma.exe`, because `sys.argv[0]` varies with whichever console-script launcher pip generated — and the helper waits using stdlib `ctypes`, **not `psutil`**, since a compiled extension can fail to import at runtime and the updater is the one tool that must still work when the environment is broken.
 - **Recursion is deterministic here, and thinking is the cost that decides it.** Measured on the RTX 2070 with `gemma4:12b`, warm: a trivial turn is **67 s with thinking, 10 s without** (thinking ≈ 85% of the turn). So (a) `--no-thinking` must actually send `think: false`, not merely hide the output — hiding-but-paying was a bug; (b) child runs (`agent.run_child`) run with thinking OFF by default; (c) there is one GPU, so a child context buys **isolation, never speed** — its whole point is that twelve document reads leave the parent's 32K window holding twelve result lines. `run_turn` gained `tools` / `max_iters` / `think` overrides for this and nothing else changed in its loop. Only ever *send* `think` when disabling — models without a thinking mode reject the field. The model never decides to recurse: per-file skills expand in `main._per_item_events` (Python control flow), because a 12B would over-recurse the way it over-triggers skills. A model-callable `delegate` is deliberately absent; when it is added it goes into `CHILD_EXCLUDED_TOOLS`, which is what caps depth at 1 in code rather than in a prompt. **Per-file children are read-only** (`MUTATING_TOOLS` withheld from their tool list; `child_readonly`, or `child_writes: true` in a skill): the very first live run had child #1 write INDEX.md with its single line because the skill's last step said "write everything to INDEX.md" — a 12B applies every step it is given. Tell it in the prompt too, but enforce it in the tool list.
+- **Vision was designed from measurements; re-measure before changing it.** On `gemma4:12b` / Ollama 0.33: (1) Ollama honours `images` on a `tool` message — a control turn with the image stripped hallucinated, with it the model named the exact marked tags and `prompt_eval_count` rose by the image's cost. So pictures ride on the `view_image` result; no fake user turn is injected (that would also poison `review.last_turn`, which treats the last user message as the question). (2) Every image costs ~260 tokens whatever its pixel size — the encoder resizes to a fixed frame. On a 1920x1080 screen with 16 px tag text, the full frame found all four red-marked tags but **misread digits in two** (`PT-9079` for `PT-9779`): plausible, silent, wrong. As 2x2 overlapping tiles: 4/4 exact. Hence `TILE_ABOVE = 1280`: larger images go as overview + 4 tiles, and `MAX_IMAGE_SLOTS = 5` caps one call at one tiled picture. (3) `read_document` must say when a document holds pictures — the incident that prompted all this was a model getting three lines of text from a `.docx` whose content was screenshots, concluding it was nearly empty, and thrashing for 25 tool calls. Python-docx (and Word) store identical pictures once, so "N images" means N distinct pictures.
+- **The shell tool runs PowerShell in a private console.** Output used to be decoded with the locale's cp1252; byte `0x9d` (from `Get-Content` on a `.docx`) crashed the reader thread and the tool said "(no output)". Now PowerShell is told to emit UTF-8 and Python decodes UTF-8 with `errors="replace"`. The UTF-8 switch (`[Console]::OutputEncoding`) sets the code page of the *whole console*, which a child shares with its parent — measured, it leaked into the user's terminal (437 → 65001) and would outlive gemma. `CREATE_NO_WINDOW` gives the child its own hidden console; keep it. `stdin=DEVNULL` so a stdin-reading command gets EOF instead of the user's keyboard. Binary-looking output gets a note pointing at `read_document` / `view_image`.
+- **Loop detection ends the turn after `max_loop_nudges` warnings (2).** Warnings alone never stopped a stuck model: the same session logged ten "loop detected" nudges and still spent all 25 calls. When it stops, every outstanding tool call gets a "Not run" reply and a closing assistant message is appended — Ollama expects each `tool_calls` entry answered. The tool-call-limit exit appends a closing assistant message too.
 - **A skill body is executed instructions.** It is the user's own file on their own machine, so the trust model is the same as a shell script — but that is why `load_skill` is gated by `allow_model_skills` and why the docs warn about skills from other people.
 - **Format is decided by content, not extension.** `doc_tools._sniff` reads magic bytes and looks *inside* ZIP containers for the marker entry (`word/document.xml`, `xl/workbook.xml`, `mimetype`), so renamed files still work. Extraction output is labelled by page/sheet/slide and capped by `max_chars` with `offset`/`limit` paging — a 400-page PDF must never be handed whole to a 32K context.
 
@@ -116,17 +124,17 @@ The installed command is **`gemma`**. Primary entry: `gemma go` (interactive cha
 
 ---
 
-## Current state (v0.5.0)
+## Current state (v0.8.0)
 
 **Working and shipped (default `gemma go`, the plain REPL):**
-- Agentic tool loop; tools: `read_file`, `read_document`, `write_file`, `edit_file`, `delete_file`, `shell`, `glob`, `grep`, `list_directory`, `web_search`, `web_fetch`, `remember`, `load_skill`, `set_plan`, `complete_step`.
-- Project + global memory (`GEMMA.md` auto-load + `remember`), session save/`--resume`, backup-on-write, trash-not-delete, approval mode (`--approve`), context compaction, current-date grounding, vision (image input), local SearXNG web search.
-- `/paste` (clipboard image) works in both REPLs. Installers self-update (`git pull` + reinstall, skipping big downloads).
+- Agentic tool loop; tools: `read_file`, `read_document`, `view_image`, `write_file`, `edit_file`, `delete_file`, `shell`, `glob`, `grep`, `list_directory`, `web_search`, `web_fetch`, `remember`, `load_skill`, `set_plan`, `complete_step`.
+- Project + global memory (`GEMMA.md` auto-load + `remember`), session save/`--resume`, backup-on-write, trash-not-delete, approval mode (`--approve`), context compaction, current-date grounding, local SearXNG web search.
+- Vision: `view_image` for image files and pictures inside Word/PowerPoint/Excel/OpenDocument/EPUB/PDF (scans included); `read_document` flags documents that contain pictures; large images tiled; `/image` (quoted paths) and `/paste` share the same normalisation. `/check` sees the images an answer was based on.
 - Document reading (`read_document`): PDF, Word, Excel, PowerPoint, OpenDocument, RTF, EPUB, `.eml`, `.ipynb`, CSV/TSV, HTML; content-sniffed format detection, page/sheet/slide paging, LibreOffice fallback for legacy `.doc`/`.ppt`.
-- Skills: markdown procedures in `skills/` (project) and `<config_dir>/skills/` (global), run as `/<name>`, captured from a transcript with `/skill new <name>`, reported by `/skills` and `gemma skills`. Index-only system-prompt injection; `load_skill` tool gated by `allow_model_skills`.
-- Human-writable memory surfaced with `/memory` and `/memory global` (the files themselves predate this).
-- `gemma update` from any folder: finds the checkout, pulls, reinstalls; `--check`, `--full`, `--repo`.
-- 141 pytest cases (`tests/test_doc_tools.py` builds a real file per format — no mocks; `tests/test_skills.py` redirects the global skills dir into tmp so a run never touches the real config dir).
+- Skills: markdown procedures in `skills/` (project) and `<config_dir>/skills/` (global), run as `/<name>`, captured with `/skill new <name>`, reported by `/skills` and `gemma skills`. `mode: per-file` skills run one read-only child per file, then a synthesis turn. `/check` reviews the last answer against its evidence.
+- `thinking: false` / `--no-thinking` actually disables reasoning (67 s → 10 s on a trivial turn, 8 GB card). Status bar in the plain REPL; Ctrl+C stops an answer, not the session; pasted multi-line prompts are one prompt.
+- `gemma update` from any folder: finds the checkout, pulls, reinstalls (deferred on Windows); `--check`, `--full`, `--repo`.
+- 282 pytest cases (`tests/test_doc_tools.py` and `tests/test_vision.py` build real files per format — no mocks; Windows-only tests drive real PowerShell for the shell tool).
 
 **Experimental (opt-in via `--live`):**
 - Live REPL: type-ahead queue, Esc-to-cancel, live GPU/CPU/VRAM status line. Functional but can render awkwardly on some Windows consoles. Needs real-terminal validation before promotion.
@@ -140,7 +148,7 @@ The installed command is **`gemma`**. Primary entry: `gemma go` (interactive cha
 ```bash
 # from a clone
 pip install -e .            # or: pip install .
-pytest -q                   # run the test suite (141 cases)
+pytest -q                   # run the test suite (282 cases)
 gemma --version             # verify the installed entry point
 gemma "what is 2+2"         # one-shot smoke test (needs Ollama running)
 ```

@@ -38,9 +38,10 @@ Write "- none" if there are no issues.
 """
 
 
-def last_turn(messages: List[Dict]) -> Optional[Dict[str, Any]]:
-    """Split the last turn into question / evidence / answer, or None if there isn't one."""
-    last_user = None
+_MAX_CHECK_IMAGES = 10
+
+
+def _last_user_index(messages: List[Dict]) -> Optional[int]:
     for i in range(len(messages) - 1, -1, -1):
         m = messages[i]
         if m.get("role") == "user":
@@ -48,8 +49,26 @@ def last_turn(messages: List[Dict]) -> Optional[Dict[str, Any]]:
             # Skip the harness's own nudges; they are not the user's question.
             if content.startswith("You returned nothing."):
                 continue
-            last_user = i
-            break
+            return i
+    return None
+
+
+def last_turn_images(messages: List[Dict]) -> List[str]:
+    """Images the last turn looked at (attached by the user or shown by
+    view_image). Without them a checker judging an image-based answer sees only
+    'Showing image1.png' as evidence and calls every such answer unsupported."""
+    start = _last_user_index(messages)
+    if start is None:
+        return []
+    found: List[str] = []
+    for m in messages[start:]:
+        found.extend(m.get("images") or [])
+    return found[:_MAX_CHECK_IMAGES]
+
+
+def last_turn(messages: List[Dict]) -> Optional[Dict[str, Any]]:
+    """Split the last turn into question / evidence / answer, or None if there isn't one."""
+    last_user = _last_user_index(messages)
     if last_user is None:
         return None
 
@@ -100,8 +119,14 @@ def check_last_turn(cfg: Dict[str, Any], messages: List[Dict], console) -> Optio
 
     review_cfg = dict(cfg)
     review_cfg["thinking"] = False
+    request: Dict[str, Any] = {"role": "user", "content": prompt}
+    images = last_turn_images(messages)
+    if images:
+        request["content"] = prompt + ("\nThe images the assistant looked at are attached to this message. "
+                                       "They are part of the EVIDENCE - look at them.")
+        request["images"] = images
     try:
-        raw = _chat_once(review_cfg, [{"role": "user", "content": prompt}],
+        raw = _chat_once(review_cfg, [request],
                          cfg.get("fast_model") or cfg["model"], on_token=tick)
     except Exception as e:
         if state["dots"]:

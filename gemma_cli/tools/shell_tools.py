@@ -50,6 +50,38 @@ def _blocked(command: str) -> bool:
     return any(rx.search(command) for rx in _COMPILED)
 
 
+# PowerShell writes redirected output in the console's code page, and Python
+# decoded it with the locale's (cp1252). Any byte that code page lacks crashed
+# the reader thread and the tool returned "(no output)" — observed live when the
+# model ran Get-Content on a .docx (a zip) and byte 0x9d came back. So PowerShell
+# is told to emit UTF-8, Python decodes UTF-8, and undecodable bytes become U+FFFD
+# instead of an exception.
+#
+# The encoding switch must happen in a PRIVATE console: [Console]::OutputEncoding
+# sets the code page of the whole console, and a child shares its parent's — so
+# without CREATE_NO_WINDOW the change leaks into the user's terminal and outlives
+# gemma (measured: 437 -> 65001). With it, the parent stays untouched.
+_PS_UTF8_PREFIX = "try { [Console]::OutputEncoding = [System.Text.Encoding]::UTF8 } catch {}; "
+
+_BINARY_NOTE = (
+    "Note: this output looks like binary data, not text. To read a document (PDF, Word, Excel, "
+    "PowerPoint...) use read_document; to look at an image or the pictures inside a document, "
+    "use view_image.\n"
+)
+
+
+def _looks_binary(text: str) -> bool:
+    """NULs, or a high share of control / replacement characters, mean the
+    command dumped a binary file — a signal the model should get, not mojibake."""
+    sample = text[:4000]
+    if not sample:
+        return False
+    if "\x00" in sample:
+        return True
+    odd = sum(1 for c in sample if c == "�" or (ord(c) < 32 and c not in "\t\n\r"))
+    return odd / len(sample) > 0.05
+
+
 def shell(inp: Dict[str, Any]) -> str:
     command = str(inp.get("command", ""))
     timeout = int(inp.get("timeout", 60) or 60)
@@ -58,8 +90,10 @@ def shell(inp: Dict[str, Any]) -> str:
     if _blocked(command):
         return f"Error: potentially destructive command blocked: {command}"
 
+    extra: Dict[str, Any] = {}
     if _IS_WINDOWS:
-        argv = ["powershell", "-NoProfile", "-NonInteractive", "-Command", command]
+        argv = ["powershell", "-NoProfile", "-NonInteractive", "-Command", _PS_UTF8_PREFIX + command]
+        extra["creationflags"] = getattr(subprocess, "CREATE_NO_WINDOW", 0x08000000)
     else:
         argv = ["bash", "-lc", command]
 
@@ -67,9 +101,12 @@ def shell(inp: Dict[str, Any]) -> str:
         result = subprocess.run(
             argv,
             capture_output=True,
-            text=True,
+            encoding="utf-8",
+            errors="replace",           # never raise on undecodable output
+            stdin=subprocess.DEVNULL,   # a command that reads stdin gets EOF, not the user's keyboard
             timeout=timeout,
-            cwd=os.getcwd(),  # run in the folder gemma was launched from
+            cwd=os.getcwd(),            # run in the folder gemma was launched from
+            **extra,
         )
     except subprocess.TimeoutExpired:
         return f"Error: command timed out after {timeout} seconds"
@@ -81,6 +118,8 @@ def shell(inp: Dict[str, Any]) -> str:
         out += ("\n--- stderr ---\n" if out else "") + result.stderr
     if result.returncode != 0:
         out += f"\n[Exit code: {result.returncode}]"
+    if _looks_binary(out):
+        out = _BINARY_NOTE + out
     if len(out) > 50000:
         out = out[:50000] + "\n... (output truncated)"
     return out if out.strip() else "(no output)"

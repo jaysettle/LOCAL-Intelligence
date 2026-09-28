@@ -14,25 +14,24 @@ streaming text, thinking, and tool activity however it likes:
     ("done",         None)  turn complete
 
 The conversation `messages` list is mutated in place so callers keep history
-across turns. Images (base64) attach to the next user message.
+across turns. Images the user attaches ride on their user message; images a
+tool returns (view_image) ride on that tool's message - Ollama honours both.
 
 Small-model reliability harness (context compaction, malformed tool-call rescue,
 loop detection, empty-turn nudge) is inspired by patterns in the MIT-licensed
 lutelute/local-cli project.
 """
 
-import base64
 import json
-from pathlib import Path
 from typing import Any, Dict, Iterator, List, Optional, Tuple
 
 import requests
 
 from .tools import OLLAMA_TOOLS, execute_tool
+from .tools.image_tools import encode_user_images
 
 Event = Tuple[str, Any]
 
-_IMAGE_EXTS = (".png", ".jpg", ".jpeg", ".gif", ".webp")
 _CHARS_PER_TOKEN = 4  # rough heuristic for the compaction budget
 
 
@@ -41,15 +40,9 @@ class AgentError(Exception):
 
 
 def encode_images(paths: Optional[List[str]]) -> List[str]:
-    out = []
-    for p in paths or []:
-        if not str(p).lower().endswith(_IMAGE_EXTS):
-            continue
-        try:
-            out.append(base64.b64encode(Path(p).expanduser().read_bytes()).decode("ascii"))
-        except Exception:
-            pass
-    return out
+    """Base64 images for the model from files the user attached (normalised,
+    and tiled when large - see image_tools)."""
+    return encode_user_images(paths)[0]
 
 
 def _parse_args(raw) -> Dict:
@@ -175,7 +168,11 @@ def run_turn(
     def _cancelled() -> bool:
         return cancel is not None and cancel.is_set()
     user_msg: Dict[str, Any] = {"role": "user", "content": user_text}
-    images = encode_images(image_paths)
+    images, image_note = encode_user_images(image_paths)
+    if image_note:
+        # Tell the model what it is looking at (a screenshot in tiles), or that an
+        # attachment failed - otherwise it describes an image it never received.
+        user_msg["content"] = f"{user_text}\n\n{image_note}" if user_text else image_note
     if images:
         user_msg["images"] = images
     messages.append(user_msg)
@@ -194,6 +191,8 @@ def run_turn(
 
     recent_sigs: List[str] = []  # for loop detection
     empty_nudges = 0
+    loop_nudges = 0
+    max_loop_nudges = int(cfg.get("max_loop_nudges", 2))
 
     for _iteration in range(max_iters):
         payload = {
@@ -280,7 +279,7 @@ def run_turn(
             "tool_calls": [{"function": {"name": t["name"], "arguments": t["args"]}} for t in tool_calls],
         })
 
-        for t in tool_calls:
+        for idx, t in enumerate(tool_calls):
             if _cancelled():
                 yield ("notice", "stopped")
                 yield ("done", None)
@@ -302,6 +301,22 @@ def run_turn(
             sig = name + "|" + json.dumps(args, sort_keys=True, ensure_ascii=False)
             recent_sigs.append(sig)
             if recent_sigs.count(sig) >= 3:
+                if loop_nudges >= max_loop_nudges:
+                    # Warnings did not break the loop: end the turn rather than
+                    # burn the rest of the budget (observed: 25 calls, no answer).
+                    # Every outstanding call still gets a reply so the transcript
+                    # stays well-formed for the next request.
+                    for rest in tool_calls[idx:]:
+                        messages.append({"role": "tool", "tool_name": rest["name"],
+                                         "content": "Not run: the turn was stopped because the same tool call kept repeating."})
+                    stop = (f"(stopped: the same tool call kept repeating with no new result after "
+                            f"{loop_nudges} warning(s), so the turn was ended early)")
+                    messages.append({"role": "assistant", "content": stop})
+                    yield ("notice", f"loop on {name} continued after {loop_nudges} warning(s); stopping the turn")
+                    yield ("text", f"\n\n_{stop}. Try rephrasing, or the task may need something the tools cannot do._\n")
+                    yield ("done", None)
+                    return
+                loop_nudges += 1
                 result = (
                     "Notice: you have already run this exact tool call twice with no change in result. "
                     "Stop repeating it — try a different approach or give your final answer."
@@ -321,10 +336,23 @@ def run_turn(
 
             yield ("tool_start", {"name": name, "args": args})
             result = execute_tool(name, args)
-            yield ("tool_result", {"name": name, "args": args, "result": result})
-            messages.append({"role": "tool", "tool_name": name, "content": result})
+            tool_images = list(getattr(result, "images", None) or [])
+            text = str(result)
+            event: Dict[str, Any] = {"name": name, "args": args, "result": text}
+            if tool_images:
+                event["images"] = len(tool_images)
+            yield ("tool_result", event)
+            tool_msg: Dict[str, Any] = {"role": "tool", "tool_name": name, "content": text}
+            if tool_images:
+                # The pictures ride on the result they belong to: Ollama honours
+                # images on tool messages (measured - a control without them
+                # hallucinated, with them the model read the marked tags exactly).
+                tool_msg["images"] = tool_images
+            messages.append(tool_msg)
 
-    yield ("text", "\n\n_(stopped: reached the tool-call limit for one message)_\n")
+    stop = "(stopped: reached the tool-call limit for one message)"
+    messages.append({"role": "assistant", "content": stop})  # keep the transcript well-formed
+    yield ("text", f"\n\n_{stop}_\n")
     yield ("done", None)
 
 
