@@ -70,8 +70,33 @@ TOOLS = [
         },
     },
     {
+        "name": "write_spreadsheet",
+        "description": (
+            "Create a real Excel spreadsheet (.xlsx) - or a .csv - from rows of data. Use this "
+            "whenever the user asks for an Excel file, a spreadsheet, a sheet or a table file. `rows` "
+            "is the table as text: one row per line with cells separated by commas (CSV), or a "
+            "markdown table; the first row is the header. Values starting with = are Excel formulas. "
+            "Never use write_file for .xlsx files - that makes a file Excel cannot open. If the file "
+            "already exists, pass overwrite=true to replace it (the old one is backed up)."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "path": {"type": "string", "description": "Where to save it, ending in .xlsx (or .csv)"},
+                "rows": {
+                    "type": "string",
+                    "description": ("The table as text: one row per line, cells separated by commas, first "
+                                    "line = headers. Put a cell containing a comma in double quotes."),
+                },
+                "sheet": {"type": "string", "description": "Worksheet name. Optional, default 'Sheet1'."},
+                "overwrite": {"type": "boolean", "description": "Replace the file if it already exists. Default false.", "default": False},
+            },
+            "required": ["path", "rows"],
+        },
+    },
+    {
         "name": "write_file",
-        "description": "Write a WHOLE file, creating it (and parent folders) if needed, overwriting if it exists. Use this for NEW files or full rewrites. To change PART of an existing file, use edit_file instead — it is safer and cheaper. Restricted to allowed write roots.",
+        "description": "Write a WHOLE plain-text file, creating it (and parent folders) if needed, overwriting if it exists. Use this for NEW files or full rewrites. For Excel/spreadsheets use write_spreadsheet. To change PART of an existing file, use edit_file instead — it is safer and cheaper. Restricted to allowed write roots.",
         "input_schema": {
             "type": "object",
             "properties": {
