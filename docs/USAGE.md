@@ -54,7 +54,7 @@ close every one and re-run.
 ### REPL commands
 
 `/paste` · `/image <path> <prompt>` · `/clear` · `/model <tag>` · `/save` · `/resume [name]` ·
-`/sessions` · `/memory [global]` · `/skills` · `/skill new <name>` · `/<skill-name>` · `/check` · `/help` · `/exit`
+`/sessions` · `/memory [global]` · `/skills` · `/skill new <name>` · `/<skill-name>` · `/check` · `/decisions` · `/help` · `/exit`
 
 ### Pasting
 
@@ -342,6 +342,51 @@ else the way you'd treat a shell script from someone else.
 
 ---
 
+## Fast decisions — skip thinking when it isn't needed
+
+Thinking is most of what a turn costs on a small GPU: on an 8 GB card a trivial prompt took
+67 s with thinking and 10 s without. gemma can ask one quick question before each turn —
+*does this need step-by-step reasoning?* — and skip thinking when the answer is a confident no.
+
+The question is a **typed decision**: a fixed set of answers, returned as probabilities instead of
+prose. By default gemma's own model answers it: the options become letters and Ollama reports how
+likely each letter is, in about 0.7 s, on your machine.
+
+```yaml
+decide_thinking: shadow     # off | shadow | on
+decide_threshold: 0.8       # how sure it must be before skipping thinking
+```
+
+- **shadow** asks and logs, and changes nothing. Run it for a while, then look:
+  ```
+  /decisions
+  ```
+  Each line shows the verdict, how sure it was, and how long the turn took.
+- **on** turns thinking off for prompts it is confident are simple, and says so in a dim line.
+  Anything unsure, or a decision that fails, keeps thinking on.
+
+Measured on 20 labelled prompts, 10 simple and 10 that need reasoning:
+
+| Backend | Correct | Time per decision |
+|---|---|---|
+| gemma4:12b, local | 20/20 | 0.7 s |
+| Jev, TypeSafe's cloud | 20/20 | 0.4 s |
+
+**Using Jev instead.** The decisions use TypeSafe's System One request format, so any server that
+speaks it can answer — including their Jev model:
+
+```yaml
+decide_backend: systemone
+decide_url: https://api.typesafe.ai
+decide_api_key_env: TYPESAFE_API_KEY   # the key is read from this environment variable, never stored
+```
+
+With TypeSafe's cloud, **the text of your prompts leaves this machine** — gemma prints a warning the
+first time it happens in a session. A self-hosted server speaking the same format stays local: point
+`decide_url` at it.
+
+---
+
 ## Sessions & safety
 
 - **Sessions** — conversations autosave per folder; `gemma go --resume` picks up where you left off.
@@ -367,7 +412,7 @@ The agent runs with **your** user privileges — that's the point; it's your mac
 ```yaml
 model: gemma4:12b
 num_ctx: 32768              # context window; raise if you have VRAM headroom
-ollama_url: http://localhost:11434
+ollama_url: http://127.0.0.1:11434   # localhost is rewritten to this: on Windows it costs ~2 s per request
 searxng_url: http://localhost:8899
 keep_alive: 30m
 max_tool_iterations: 25

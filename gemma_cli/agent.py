@@ -23,6 +23,7 @@ lutelute/local-cli project.
 """
 
 import json
+import time
 from typing import Any, Dict, Iterator, List, Optional, Tuple
 
 import requests
@@ -148,7 +149,80 @@ def _maybe_compact(cfg: Dict[str, Any], messages: List[Dict]) -> Optional[str]:
     return f"compacted {len(middle)} earlier messages to fit the context window"
 
 
+_REMOTE_WARNED: set = set()
+
+
 def run_turn(
+    cfg: Dict[str, Any],
+    messages: List[Dict],
+    user_text: str,
+    image_paths: Optional[List[str]] = None,
+    approver=None,
+    cancel=None,
+    *,
+    tools: Optional[List[Dict]] = None,
+    max_iters: Optional[int] = None,
+    think: Optional[bool] = None,
+) -> Iterator[Event]:
+    """Run one user turn (see _run_turn), with the thinking decision in front.
+
+    decide_thinking: off | shadow | on. In shadow mode a fast typed decision
+    ("does this need step-by-step reasoning?") is asked and logged to
+    .gemma/decisions.jsonl with the turn's duration, and nothing else changes.
+    In on mode a confident "simple" sends the turn with thinking off - measured,
+    thinking is ~85% of a trivial turn on an 8 GB card. Only top-level turns
+    are checked: callers passing tools/think/max_iters (child runs) chose already.
+    """
+    mode = str(cfg.get("decide_thinking") or "off").lower()
+    top_level = tools is None and think is None and max_iters is None
+    if mode not in ("shadow", "on") or not top_level or not cfg.get("thinking", True) or not user_text:
+        yield from _run_turn(cfg, messages, user_text, image_paths, approver, cancel,
+                             tools=tools, max_iters=max_iters, think=think)
+        return
+
+    from . import decide as dm
+
+    if dm.is_remote(cfg):
+        host = str(cfg.get("decide_url"))
+        if host not in _REMOTE_WARNED:
+            _REMOTE_WARNED.add(host)
+            yield ("notice", f"decisions are sent to {host} - the text of your prompts leaves this machine")
+    d = dm.thinking_check(cfg, user_text)
+    a = d.answers.get("effort")
+    skip = mode == "on" and dm.skip_thinking(cfg, d)
+    if skip:
+        yield ("notice", f"thinking off for this turn: simple request "
+                         f"({(a.confidence or 0):.0%} sure, decided in {d.seconds:.1f}s)")
+    elif a is not None and a.error:
+        yield ("notice", f"thinking decision unavailable ({a.error}) - thinking stays on")
+    start = time.perf_counter()
+    finished = False
+    try:
+        for event in _run_turn(cfg, messages, user_text, image_paths, approver, cancel,
+                               think=False if skip else None):
+            if event[0] == "done":
+                finished = True
+            yield event
+    finally:
+        dm.log_decision({
+            "time": time.strftime("%Y-%m-%d %H:%M:%S"),
+            "point": "thinking",
+            "mode": mode,
+            "backend": d.backend,
+            "model": d.model,
+            "prompt": user_text[:200],
+            "answer": a.value if a else None,
+            "confidence": a.confidence if a else None,
+            "probabilities": a.probabilities if a else {},
+            "error": a.error if a else "no answer",
+            "decide_seconds": d.seconds,
+            "thinking_used": not skip,
+            "turn_seconds": round(time.perf_counter() - start, 1),
+            "finished": finished,
+        })
+
+
+def _run_turn(
     cfg: Dict[str, Any],
     messages: List[Dict],
     user_text: str,

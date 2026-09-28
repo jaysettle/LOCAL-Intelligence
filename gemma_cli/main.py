@@ -247,6 +247,34 @@ _HELP = (
 )
 
 
+def _show_decisions(parts, cfg, console):
+    """`/decisions [n]` — what the thinking check said for recent turns, and how long they took."""
+    from rich.markup import escape
+
+    from . import decide as dm
+
+    try:
+        n = int(parts[1]) if len(parts) >= 2 else 20
+    except ValueError:
+        n = 20
+    rows = dm.read_log(n)
+    mode = cfg.get("decide_thinking", "off")
+    if not rows:
+        console.print(f"[dim]no decisions logged in this folder yet (decide_thinking: {mode}). "
+                      "Set decide_thinking: shadow in config.yaml, or GEMMA_DECIDE_THINKING=shadow.[/dim]")
+        return
+    console.print(f"[dim]decide_thinking: {mode}, backend: {cfg.get('decide_backend', 'gemma')} "
+                  f"- last {len(rows)} of {dm.log_path()}[/dim]")
+    for r in rows:
+        conf = r.get("confidence")
+        verdict = r.get("answer") or f"unknown ({r.get('error', '')})"
+        conf_txt = f"{conf:.0%}" if isinstance(conf, (int, float)) else "  - "
+        think = "think" if r.get("thinking_used", True) else "no-think"
+        console.print(f"[dim]{escape(str(r.get('time', '')))}  {escape(str(verdict)):>9} {conf_txt:>5}  "
+                      f"decide {r.get('decide_seconds', 0):.1f}s  turn {r.get('turn_seconds', 0):.0f}s ({think})  "
+                      f"{escape(str(r.get('prompt', ''))[:60])}[/dim]")
+
+
 def _handle_memory(parts, cfg, console):
     """`/memory` — open the human-writable memory file in an editor."""
     from . import skills as skills_mod
@@ -469,6 +497,9 @@ def _handle_command(line, cfg, messages, console, session_path):
     if cmd == "/check":
         from .review import check_last_turn
         check_last_turn(cfg, messages, console)
+        return ("handled", None, None)
+    if cmd == "/decisions":
+        _show_decisions(parts, cfg, console)
         return ("handled", None, None)
     if cmd == "/skills":
         _skill_report(console)
